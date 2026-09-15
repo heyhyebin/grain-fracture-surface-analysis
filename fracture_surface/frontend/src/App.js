@@ -6,25 +6,6 @@ import {
   useCallback,
 } from "react";
 
-import FlipCard from "./components/FlipCard";
-
-
-const FRACTURE_TYPES = [
-  "취성 파괴",
-  "연성 파괴",
-  "피로 파괴",
-  "입계 파괴",
-];
-
-
-const EN_NAMES = {
-  "취성 파괴": "Cleavage",
-  "연성 파괴": "Ductile",
-  "피로 파괴": "Fatigue",
-  "입계 파괴": "Intergranular",
-};
-
-
 const CLASS_COLORS = {
   Cleavage: "#2563EB",
   Ductile: "#16A34A",
@@ -32,41 +13,12 @@ const CLASS_COLORS = {
   Intergranular: "#DC2626",
 };
 
-
-const DEFAULT_SIMILARITIES = {
-  "취성 파괴": {
-    sim: "—",
-    best: false,
-    mixed: false,
-  },
-
-  "연성 파괴": {
-    sim: "—",
-    best: false,
-    mixed: false,
-  },
-
-  "피로 파괴": {
-    sim: "—",
-    best: false,
-    mixed: false,
-  },
-
-  "입계 파괴": {
-    sim: "—",
-    best: false,
-    mixed: false,
-  },
+const EN_NAMES = {
+  "취성 파괴": "Cleavage",
+  "연성 파괴": "Ductile",
+  "피로 파괴": "Fatigue",
+  "입계 파괴": "Intergranular",
 };
-
-
-const FRACTURE_IMAGES = {
-  "취성 파괴": "/images/cleavage.jpg",
-  "연성 파괴": "/images/ductile.jpg",
-  "피로 파괴": "/images/fatigue.png",
-  "입계 파괴": "/images/Intergranular.jpg",
-};
-
 
 const MATERIAL_LABELS = {
   steel: "강 (Steel)",
@@ -81,183 +33,70 @@ const MATERIAL_LABELS = {
   unknown: "모름",
 };
 
-
 const CONFIDENCE_BOX_STYLES = {
-  high:
-    "border-green-200 bg-green-50 text-green-700",
-
-  medium:
-    "border-amber-200 bg-amber-50 text-amber-700",
-
-  low:
-    "border-red-200 bg-red-50 text-red-700",
+  high: "border-green-200 bg-green-50 text-green-700",
+  medium: "border-amber-200 bg-amber-50 text-amber-700",
+  low: "border-red-200 bg-red-50 text-red-700",
 };
-
 
 const layout = {
-  page:
-    "min-h-screen bg-slate-50 text-slate-900",
-
-  container:
-    "max-w-7xl mx-auto px-6",
-
-  section:
-    "max-w-7xl mx-auto px-6 py-10",
-
-  card:
-    "bg-white rounded-2xl border p-6 shadow-sm",
-
-  resultBox:
-    "p-5 bg-slate-50 rounded-xl",
-
-  select:
-    "p-3 border rounded-xl bg-white",
+  page: "min-h-screen bg-[#f4f7fb] text-slate-900",
+  container: "max-w-[1500px] mx-auto px-6",
 };
 
-
-// =========================================================
-// 이미지 로드
-// =========================================================
-
 function loadImage(src) {
-  return new Promise(
-    (resolve, reject) => {
-      const img = new Image();
+  return new Promise((resolve, reject) => {
+    const img = new Image();
 
-      img.onload = () =>
-        resolve(img);
-
-      img.onerror =
-        reject;
-
-      img.src = src;
-    }
-  );
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
 }
 
-
-// =========================================================
-// 흑백 PNG → mask
-// =========================================================
-
-function decodeMaskFromImage(
-  img,
-  W,
-  H
-) {
-  const c =
-    document.createElement(
-      "canvas"
-    );
+function decodeMaskFromImage(img, W, H) {
+  const c = document.createElement("canvas");
 
   c.width = W;
   c.height = H;
 
-  const ctx =
-    c.getContext("2d");
+  const ctx = c.getContext("2d");
 
-  ctx.drawImage(
-    img,
-    0,
-    0,
-    W,
-    H
-  );
+  ctx.drawImage(img, 0, 0, W, H);
 
-  const { data } =
-    ctx.getImageData(
-      0,
-      0,
-      W,
-      H
-    );
+  const { data } = ctx.getImageData(0, 0, W, H);
 
-  const mask =
-    new Uint8Array(
-      W * H
-    );
+  const mask = new Uint8Array(W * H);
 
-  for (
-    let i = 0;
-    i < W * H;
-    i++
-  ) {
-    mask[i] =
-      data[i * 4] > 127
-        ? 255
-        : 0;
+  for (let i = 0; i < W * H; i++) {
+    mask[i] = data[i * 4] > 127 ? 255 : 0;
   }
 
   return mask;
 }
 
-
-// =========================================================
-// Marching Squares
-// mask → segment
-// =========================================================
-
-function maskToSegments(
-  mask,
-  W,
-  H
-) {
+function maskToSegments(mask, W, H) {
   const segments = [];
 
-  const get = (
-    x,
-    y
-  ) =>
-    x < 0 ||
-    y < 0 ||
-    x >= W ||
-    y >= H
+  const get = (x, y) =>
+    x < 0 || y < 0 || x >= W || y >= H
       ? 0
-      : mask[
-            y * W + x
-          ] > 0
+      : mask[y * W + x] > 0
       ? 1
       : 0;
 
-
-  for (
-    let y = -1;
-    y < H;
-    y++
-  ) {
-    for (
-      let x = -1;
-      x < W;
-      x++
-    ) {
-      const tl =
-        get(x, y);
-
-      const tr =
-        get(
-          x + 1,
-          y
-        );
-
-      const bl =
-        get(
-          x,
-          y + 1
-        );
-
-      const br =
-        get(
-          x + 1,
-          y + 1
-        );
-
+  for (let y = -1; y < H; y++) {
+    for (let x = -1; x < W; x++) {
+      const tl = get(x, y);
+      const tr = get(x + 1, y);
+      const bl = get(x, y + 1);
+      const br = get(x + 1, y + 1);
 
       const code =
         (tl << 3) |
         (tr << 2) |
         (br << 1) |
         bl;
-
 
       const top = {
         x: x + 1.0,
@@ -279,114 +118,63 @@ function maskToSegments(
         y: y + 1.0,
       };
 
-
       switch (code) {
         case 1:
-          segments.push([
-            left,
-            bottom,
-          ]);
+          segments.push([left, bottom]);
           break;
 
         case 2:
-          segments.push([
-            bottom,
-            right,
-          ]);
+          segments.push([bottom, right]);
           break;
 
         case 3:
-          segments.push([
-            left,
-            right,
-          ]);
+          segments.push([left, right]);
           break;
 
         case 4:
-          segments.push([
-            top,
-            right,
-          ]);
+          segments.push([top, right]);
           break;
 
         case 5:
-          segments.push([
-            left,
-            top,
-          ]);
-
-          segments.push([
-            bottom,
-            right,
-          ]);
+          segments.push([left, top]);
+          segments.push([bottom, right]);
           break;
 
         case 6:
-          segments.push([
-            top,
-            bottom,
-          ]);
+          segments.push([top, bottom]);
           break;
 
         case 7:
-          segments.push([
-            left,
-            top,
-          ]);
+          segments.push([left, top]);
           break;
 
         case 8:
-          segments.push([
-            top,
-            left,
-          ]);
+          segments.push([top, left]);
           break;
 
         case 9:
-          segments.push([
-            top,
-            bottom,
-          ]);
+          segments.push([top, bottom]);
           break;
 
         case 10:
-          segments.push([
-            top,
-            right,
-          ]);
-
-          segments.push([
-            left,
-            bottom,
-          ]);
+          segments.push([top, right]);
+          segments.push([left, bottom]);
           break;
 
         case 11:
-          segments.push([
-            top,
-            right,
-          ]);
+          segments.push([top, right]);
           break;
 
         case 12:
-          segments.push([
-            left,
-            right,
-          ]);
+          segments.push([left, right]);
           break;
 
         case 13:
-          segments.push([
-            bottom,
-            right,
-          ]);
+          segments.push([bottom, right]);
           break;
 
         case 14:
-          segments.push([
-            left,
-            bottom,
-          ]);
+          segments.push([left, bottom]);
           break;
 
         default:
@@ -398,181 +186,96 @@ function maskToSegments(
   return segments;
 }
 
-
-// =========================================================
-// segment → polyline
-// =========================================================
-
-function segmentsToPolylines(
-  segments
-) {
+function segmentsToPolylines(segments) {
   const key = (p) =>
-    `${p.x.toFixed(
-      2
-    )},${p.y.toFixed(
-      2
-    )}`;
+    `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
 
+  const map = new Map();
 
-  const map =
-    new Map();
+  segments.forEach((seg, i) => {
+    const k1 = key(seg[0]);
+    const k2 = key(seg[1]);
 
-
-  segments.forEach(
-    (seg, i) => {
-      const k1 =
-        key(seg[0]);
-
-      const k2 =
-        key(seg[1]);
-
-
-      if (
-        !map.has(k1)
-      ) {
-        map.set(
-          k1,
-          []
-        );
-      }
-
-      if (
-        !map.has(k2)
-      ) {
-        map.set(
-          k2,
-          []
-        );
-      }
-
-
-      map
-        .get(k1)
-        .push(i);
-
-      map
-        .get(k2)
-        .push(i);
+    if (!map.has(k1)) {
+      map.set(k1, []);
     }
-  );
 
+    if (!map.has(k2)) {
+      map.set(k2, []);
+    }
 
-  const used =
-    new Array(
-      segments.length
-    ).fill(false);
+    map.get(k1).push(i);
+    map.get(k2).push(i);
+  });
 
+  const used = new Array(
+    segments.length
+  ).fill(false);
 
   const polylines = [];
 
-
   for (
     let i = 0;
-    i <
-    segments.length;
+    i < segments.length;
     i++
   ) {
     if (used[i]) {
       continue;
     }
 
-
     used[i] = true;
-
 
     const poly = [
       segments[i][0],
       segments[i][1],
     ];
 
-
-    let extended =
-      true;
-
+    let extended = true;
 
     while (extended) {
-      extended =
-        false;
-
+      extended = false;
 
       const tail =
-        poly[
-          poly.length - 1
-        ];
-
+        poly[poly.length - 1];
 
       const cands =
-        map.get(
-          key(tail)
-        ) || [];
+        map.get(key(tail)) || [];
 
-
-      for (
-        const ci
-        of cands
-      ) {
-        if (
-          used[ci]
-        ) {
+      for (const ci of cands) {
+        if (used[ci]) {
           continue;
         }
 
-
         const seg =
           segments[ci];
-
 
         if (
           key(seg[0]) ===
           key(tail)
         ) {
-          poly.push(
-            seg[1]
-          );
-
-          used[ci] =
-            true;
-
-          extended =
-            true;
-
+          poly.push(seg[1]);
+          used[ci] = true;
+          extended = true;
           break;
         }
-
 
         if (
           key(seg[1]) ===
           key(tail)
         ) {
-          poly.push(
-            seg[0]
-          );
-
-          used[ci] =
-            true;
-
-          extended =
-            true;
-
+          poly.push(seg[0]);
+          used[ci] = true;
+          extended = true;
           break;
         }
       }
     }
 
-
-    polylines.push(
-      poly
-    );
+    polylines.push(poly);
   }
-
 
   return polylines;
 }
-
-
-// =========================================================
-// polyline 그리기
-// =========================================================
 
 function drawPolylines(
   ctx,
@@ -587,26 +290,16 @@ function drawPolylines(
 ) {
   ctx.save();
 
-  ctx.strokeStyle =
-    color;
-
-  ctx.lineWidth =
-    lineWidth;
-
-  ctx.lineJoin =
-    "round";
-
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineJoin = "round";
 
   const isDashed =
-    !!dashPattern ||
-    dashed;
+    !!dashPattern || dashed;
 
-
-  ctx.lineCap =
-    isDashed
-      ? "butt"
-      : "round";
-
+  ctx.lineCap = isDashed
+    ? "butt"
+    : "round";
 
   if (dashPattern) {
     ctx.setLineDash(
@@ -615,34 +308,23 @@ function drawPolylines(
 
     ctx.lineDashOffset =
       dashOffset;
-  } else if (
-    dashed
-  ) {
+  } else if (dashed) {
     ctx.setLineDash([
       16,
       10,
     ]);
 
-    ctx.lineDashOffset =
-      0;
+    ctx.lineDashOffset = 0;
   } else {
     ctx.setLineDash([]);
 
-    ctx.lineDashOffset =
-      0;
+    ctx.lineDashOffset = 0;
   }
 
-
-  for (
-    const poly
-    of polylines
-  ) {
-    if (
-      poly.length < 2
-    ) {
+  for (const poly of polylines) {
+    if (poly.length < 2) {
       continue;
     }
-
 
     ctx.beginPath();
 
@@ -650,7 +332,6 @@ function drawPolylines(
       poly[0].x,
       poly[0].y
     );
-
 
     for (
       let i = 1;
@@ -663,23 +344,16 @@ function drawPolylines(
       );
     }
 
-
     ctx.stroke();
   }
-
 
   ctx.restore();
 }
 
-
-// =========================================================
-// Grad-CAM View
-// =========================================================
-
 function GradcamView({
   result,
   chipSize = "text-xs",
-  canvasClass = "h-[260px]",
+  canvasClass = "h-[320px]",
 }) {
   const canvasRef =
     useRef(null);
@@ -693,14 +367,8 @@ function GradcamView({
   const layerImgsRef =
     useRef({});
 
-
   const hasMasks =
     !!result.gradcam_masks;
-
-
-  // -------------------------------------------------------
-  // Grad-CAM 데이터
-  // -------------------------------------------------------
 
   const sourceObj =
     useMemo(() => {
@@ -714,14 +382,12 @@ function GradcamView({
       result.gradcam_layers,
     ]);
 
-
   const allClasses =
     useMemo(() => {
       return Object.keys(
         sourceObj
       );
     }, [sourceObj]);
-
 
   const activeClasses =
     useMemo(() => {
@@ -735,8 +401,7 @@ function GradcamView({
 
           return (
             contours &&
-            contours.length >
-              0
+            contours.length > 0
           );
         }
       );
@@ -745,28 +410,17 @@ function GradcamView({
       result.gradcam_contours,
     ]);
 
-
-  const [
-    checked,
-    setChecked,
-  ] = useState(() =>
-    Object.fromEntries(
-      allClasses.map(
-        (name) => [
-          name,
-          true,
-        ]
+  const [checked, setChecked] =
+    useState(() =>
+      Object.fromEntries(
+        allClasses.map(
+          (name) => [
+            name,
+            true,
+          ]
+        )
       )
-    )
-  );
-
-
-  // -------------------------------------------------------
-  // redraw
-  //
-  // 중요:
-  // useEffect에서 사용하기 전에 먼저 선언해야 함.
-  // -------------------------------------------------------
+    );
 
   const redraw =
     useCallback(() => {
@@ -776,7 +430,6 @@ function GradcamView({
       const base =
         baseImgRef.current;
 
-
       if (
         !canvas ||
         !base
@@ -784,26 +437,17 @@ function GradcamView({
         return;
       }
 
-
       const W =
         base.naturalWidth;
 
       const H =
         base.naturalHeight;
 
-
-      canvas.width =
-        W;
-
-      canvas.height =
-        H;
-
+      canvas.width = W;
+      canvas.height = H;
 
       const ctx =
-        canvas.getContext(
-          "2d"
-        );
-
+        canvas.getContext("2d");
 
       ctx.clearRect(
         0,
@@ -812,17 +456,11 @@ function GradcamView({
         H
       );
 
-
       ctx.drawImage(
         base,
         0,
         0
       );
-
-
-      // ===================================================
-      // 새로운 mask 방식
-      // ===================================================
 
       if (hasMasks) {
         const active =
@@ -831,25 +469,19 @@ function GradcamView({
               checked[name]
           );
 
-
         if (
-          active.length ===
-          0
+          active.length === 0
         ) {
           return;
         }
 
-
         const masks = {};
 
-
         for (
-          const name
-          of active
+          const name of active
         ) {
           if (
-            masksRef
-              .current[
+            masksRef.current[
               name
             ]
           ) {
@@ -860,54 +492,43 @@ function GradcamView({
           }
         }
 
+        const DASH_ON = 14;
+        const SLOT = 22;
 
-        const DASH_ON =
-          14;
+        const isInsideMask = (
+          x,
+          y,
+          name
+        ) => {
+          const m =
+            masks[name];
 
-        const SLOT =
-          22;
+          if (!m) {
+            return false;
+          }
 
+          const ix =
+            Math.round(x);
 
-        const isInsideMask =
-          (
-            x,
-            y,
-            name
-          ) => {
-            const m =
-              masks[name];
+          const iy =
+            Math.round(y);
 
+          if (
+            ix < 0 ||
+            iy < 0 ||
+            ix >= W ||
+            iy >= H
+          ) {
+            return false;
+          }
 
-            if (!m) {
-              return false;
-            }
-
-
-            const ix =
-              Math.round(x);
-
-            const iy =
-              Math.round(y);
-
-
-            if (
-              ix < 0 ||
-              iy < 0 ||
-              ix >= W ||
-              iy >= H
-            ) {
-              return false;
-            }
-
-
-            return (
-              m[
-                iy * W +
-                  ix
-              ] > 0
-            );
-          };
-
+          return (
+            m[
+              iy * W +
+                ix
+            ] > 0
+          );
+        };
 
         const othersContaining =
           (
@@ -917,10 +538,9 @@ function GradcamView({
             const found =
               [];
 
-
             for (
-              const other
-              of active
+              const other of
+              active
             ) {
               if (
                 other ===
@@ -928,7 +548,6 @@ function GradcamView({
               ) {
                 continue;
               }
-
 
               if (
                 isInsideMask(
@@ -943,29 +562,23 @@ function GradcamView({
               }
             }
 
-
             return found;
           };
 
-
         for (
-          const name
-          of active
+          const name of active
         ) {
           const mask =
             masks[name];
-
 
           if (!mask) {
             continue;
           }
 
-
           const layerCanvas =
             document.createElement(
               "canvas"
             );
-
 
           layerCanvas.width =
             W;
@@ -973,12 +586,10 @@ function GradcamView({
           layerCanvas.height =
             H;
 
-
           const layerCtx =
             layerCanvas.getContext(
               "2d"
             );
-
 
           const segs =
             maskToSegments(
@@ -986,7 +597,6 @@ function GradcamView({
               W,
               H
             );
-
 
           if (
             segs.length ===
@@ -1001,24 +611,20 @@ function GradcamView({
             continue;
           }
 
-
           const polylines =
             segmentsToPolylines(
               segs
             );
 
-
           for (
-            const poly
-            of polylines
+            const poly of
+            polylines
           ) {
             if (
-              poly.length <
-              2
+              poly.length < 2
             ) {
               continue;
             }
-
 
             const pointStates =
               poly.map(
@@ -1029,14 +635,12 @@ function GradcamView({
                       name
                     );
 
-
                   if (
                     others.length ===
                     0
                   ) {
                     return "solo";
                   }
-
 
                   return (
                     "overlap:" +
@@ -1047,10 +651,7 @@ function GradcamView({
                 }
               );
 
-
-            let segStart =
-              0;
-
+            let segStart = 0;
 
             for (
               let i = 1;
@@ -1062,7 +663,6 @@ function GradcamView({
                 i ===
                 pointStates.length;
 
-
               const stateChanged =
                 !isEnd &&
                 pointStates[
@@ -1071,7 +671,6 @@ function GradcamView({
                   pointStates[
                     segStart
                   ];
-
 
               if (
                 isEnd ||
@@ -1086,12 +685,10 @@ function GradcamView({
                         : 1)
                   );
 
-
                 const state =
                   pointStates[
                     segStart
                   ];
-
 
                 if (
                   state ===
@@ -1099,13 +696,14 @@ function GradcamView({
                 ) {
                   drawPolylines(
                     layerCtx,
-                    [subPoly],
+                    [
+                      subPoly,
+                    ],
                     CLASS_COLORS[
                       name
                     ],
                     {
-                      lineWidth:
-                        3,
+                      lineWidth: 3,
                     }
                   );
                 } else {
@@ -1115,10 +713,7 @@ function GradcamView({
                         "overlap:"
                           .length
                       )
-                      .split(
-                        ","
-                      );
-
+                      .split(",");
 
                   const candidates =
                     [
@@ -1126,21 +721,17 @@ function GradcamView({
                       ...others,
                     ].sort();
 
-
                   const N =
                     candidates.length;
-
 
                   const myIndex =
                     candidates.indexOf(
                       name
                     );
 
-
                   const period =
                     N *
                     SLOT;
-
 
                   const dashPattern =
                     [
@@ -1149,36 +740,30 @@ function GradcamView({
                         DASH_ON,
                     ];
 
-
                   const dashOffset =
                     -myIndex *
                     SLOT;
 
-
                   drawPolylines(
                     layerCtx,
-                    [subPoly],
+                    [
+                      subPoly,
+                    ],
                     CLASS_COLORS[
                       name
                     ],
                     {
-                      lineWidth:
-                        4.5,
-
+                      lineWidth: 4.5,
                       dashPattern,
-
                       dashOffset,
                     }
                   );
                 }
 
-
-                segStart =
-                  i;
+                segStart = i;
               }
             }
           }
-
 
           ctx.drawImage(
             layerCanvas,
@@ -1186,16 +771,10 @@ function GradcamView({
             0
           );
         }
-      }
-
-      // ===================================================
-      // 기존 컬러 PNG layer 방식
-      // ===================================================
-
-      else {
+      } else {
         for (
-          const name
-          of allClasses
+          const name of
+          allClasses
         ) {
           if (
             !checked[name]
@@ -1203,17 +782,11 @@ function GradcamView({
             continue;
           }
 
-
           const layerImg =
             layerImgsRef
-              .current[
-              name
-            ];
+              .current[name];
 
-
-          if (
-            layerImg
-          ) {
+          if (layerImg) {
             ctx.drawImage(
               layerImg,
               0,
@@ -1228,11 +801,6 @@ function GradcamView({
       hasMasks,
     ]);
 
-
-  // -------------------------------------------------------
-  // 새 결과가 들어오면 체크 상태 초기화
-  // -------------------------------------------------------
-
   useEffect(() => {
     setChecked(
       Object.fromEntries(
@@ -1246,15 +814,9 @@ function GradcamView({
     );
   }, [allClasses]);
 
-
-  // -------------------------------------------------------
-  // 이미지 / mask 로드
-  // -------------------------------------------------------
-
   useEffect(() => {
     let cancelled =
       false;
-
 
     const loadAll =
       async () => {
@@ -1264,23 +826,17 @@ function GradcamView({
           return;
         }
 
-
         const base =
           await loadImage(
             result.base_image
           );
 
-
-        if (
-          cancelled
-        ) {
+        if (cancelled) {
           return;
         }
 
-
         baseImgRef.current =
           base;
-
 
         const W =
           base.naturalWidth;
@@ -1288,37 +844,33 @@ function GradcamView({
         const H =
           base.naturalHeight;
 
-
         if (hasMasks) {
           masksRef.current =
             {};
 
-
           for (
-            const name
-            of allClasses
+            const name of
+            allClasses
           ) {
             const src =
-              sourceObj[name];
-
+              sourceObj[
+                name
+              ];
 
             if (!src) {
               continue;
             }
-
 
             const img =
               await loadImage(
                 src
               );
 
-
             if (
               cancelled
             ) {
               return;
             }
-
 
             masksRef.current[
               name
@@ -1333,19 +885,18 @@ function GradcamView({
           layerImgsRef.current =
             {};
 
-
           for (
-            const name
-            of allClasses
+            const name of
+            allClasses
           ) {
             const src =
-              sourceObj[name];
-
+              sourceObj[
+                name
+              ];
 
             if (!src) {
               continue;
             }
-
 
             layerImgsRef.current[
               name
@@ -1353,7 +904,6 @@ function GradcamView({
               await loadImage(
                 src
               );
-
 
             if (
               cancelled
@@ -1363,17 +913,13 @@ function GradcamView({
           }
         }
 
-
         redraw();
       };
 
-
     loadAll();
 
-
     return () => {
-      cancelled =
-        true;
+      cancelled = true;
     };
   }, [
     result.base_image,
@@ -1383,29 +929,19 @@ function GradcamView({
     redraw,
   ]);
 
-
-  // -------------------------------------------------------
-  // 활성 클래스가 변하면 redraw
-  // -------------------------------------------------------
-
   useEffect(() => {
     redraw();
   }, [redraw]);
 
-
-  const toggle = (
-    name
-  ) => {
+  const toggle = (name) => {
     setChecked(
       (prev) => ({
         ...prev,
-
         [name]:
           !prev[name],
       })
     );
   };
-
 
   return (
     <div>
@@ -1421,21 +957,19 @@ function GradcamView({
                   (key) =>
                     EN_NAMES[
                       key
-                    ] === name
+                    ] ===
+                    name
                 );
-
 
               const color =
                 CLASS_COLORS[
                   name
                 ];
 
-
               const on =
                 checked[
                   name
                 ];
-
 
               return (
                 <button
@@ -1472,9 +1006,8 @@ function GradcamView({
         </div>
       )}
 
-
       <div
-        className={`w-full ${canvasClass} rounded-xl border bg-white overflow-hidden flex items-center justify-center`}
+        className={`w-full ${canvasClass} rounded-xl border border-slate-200 bg-white overflow-hidden flex items-center justify-center`}
       >
         <canvas
           ref={
@@ -1491,153 +1024,127 @@ function GradcamView({
   );
 }
 
-
-// =========================================================
-// Grad-CAM Modal
-// =========================================================
-
-function GradcamModal({
-  result,
+function ModalShell({
+  title,
+  subtitle,
   onClose,
+  children,
+  maxWidth = "max-w-5xl",
 }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
-      <div className="bg-white rounded-3xl max-w-5xl w-full p-5 shadow-2xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-bold">
-            Grad-CAM++
-            확대 보기
-          </h3>
+    <div className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-5">
+      <div
+        className={`bg-white ${maxWidth} w-full max-h-[90vh] rounded-[24px] shadow-2xl overflow-hidden flex flex-col`}
+      >
+        <div className="flex items-start justify-between gap-5 px-7 py-5 border-b border-slate-200">
+          <div>
+            <h3 className="text-xl font-bold">
+              {title}
+            </h3>
 
+            {subtitle && (
+              <p className="text-sm text-slate-500 mt-1">
+                {subtitle}
+              </p>
+            )}
+          </div>
 
           <button
             onClick={
               onClose
             }
-            className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm hover:bg-slate-700 transition"
+            className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition text-lg"
           >
-            닫기
+            ×
           </button>
         </div>
 
-
-        <GradcamView
-          result={
-            result
-          }
-          chipSize="text-sm"
-          canvasClass="max-h-[70vh]"
-        />
+        <div className="overflow-y-auto p-7">
+          {children}
+        </div>
       </div>
     </div>
   );
 }
 
-
-// =========================================================
-// App
-// =========================================================
-
 export default function App() {
   const fileRef =
     useRef(null);
-
 
   const [
     previewUrl,
     setPreviewUrl,
   ] = useState(null);
 
-
   const [
     thumbnailBase64,
     setThumbnailBase64,
   ] = useState(null);
-
 
   const [
     uploading,
     setUploading,
   ] = useState(false);
 
-
   const [
     material,
     setMaterial,
   ] = useState("");
-
 
   const [
     result,
     setResult,
   ] = useState(null);
 
-
-  const [
-    similarities,
-    setSimilarities,
-  ] = useState(
-    DEFAULT_SIMILARITIES
-  );
-
-
   const [
     history,
     setHistory,
   ] = useState([]);
-
 
   const [
     sidebarOpen,
     setSidebarOpen,
   ] = useState(true);
 
-
   const [
     selectedCompareIds,
     setSelectedCompareIds,
   ] = useState([]);
-
 
   const [
     showCompareModal,
     setShowCompareModal,
   ] = useState(false);
 
-
   const [
     compareSummary,
     setCompareSummary,
   ] = useState(null);
-
 
   const [
     compareLoading,
     setCompareLoading,
   ] = useState(false);
 
+  const [
+    showAIModal,
+    setShowAIModal,
+  ] = useState(false);
+
+  const [
+    showPhaseModal,
+    setShowPhaseModal,
+  ] = useState(false);
+
+  const [
+    showSimilarModal,
+    setShowSimilarModal,
+  ] = useState(false);
 
   const [
     showGradcamModal,
     setShowGradcamModal,
   ] = useState(false);
-
-
-  const [
-    showSimilar,
-    setShowSimilar,
-  ] = useState(false);
-
-
-  const [
-    similarIndex,
-    setSimilarIndex,
-  ] = useState(0);
-
-
-  // =======================================================
-  // 분석 기록 불러오기
-  // =======================================================
 
   useEffect(() => {
     try {
@@ -1645,7 +1152,6 @@ export default function App() {
         localStorage.getItem(
           "analysisHistory"
         );
-
 
       if (saved) {
         setHistory(
@@ -1660,13 +1166,11 @@ export default function App() {
         err
       );
 
-
       localStorage.removeItem(
         "analysisHistory"
       );
     }
   }, []);
-
 
   const materialText =
     MATERIAL_LABELS[
@@ -1674,7 +1178,6 @@ export default function App() {
     ] ||
     result?.material ||
     "-";
-
 
   const confidenceStyle =
     CONFIDENCE_BOX_STYLES[
@@ -1684,6 +1187,16 @@ export default function App() {
     CONFIDENCE_BOX_STYLES
       .medium;
 
+  const confidenceLabel =
+    result
+      ?.confidence_status ===
+    "high"
+      ? "높음"
+      : result
+          ?.confidence_status ===
+        "low"
+      ? "낮음"
+      : "보통";
 
   const compareItems =
     history.filter(
@@ -1693,10 +1206,21 @@ export default function App() {
         )
     );
 
-
-  // =======================================================
-  // File → Base64
-  // =======================================================
+  const sameCompareCause =
+    compareItems.length >=
+      2 &&
+    (
+      compareItems[0]
+        ?.result
+        ?.expected_cause ||
+      ""
+    ).trim() ===
+      (
+        compareItems[1]
+          ?.result
+          ?.expected_cause ||
+        ""
+      ).trim();
 
   const fileToBase64 = (
     file
@@ -1709,17 +1233,14 @@ export default function App() {
         const reader =
           new FileReader();
 
-
         reader.onload =
           () =>
             resolve(
               reader.result
             );
 
-
         reader.onerror =
           reject;
-
 
         reader.readAsDataURL(
           file
@@ -1727,11 +1248,6 @@ export default function App() {
       }
     );
   };
-
-
-  // =======================================================
-  // thumbnail 생성
-  // =======================================================
 
   const makeThumbnail = (
     file,
@@ -1746,10 +1262,8 @@ export default function App() {
         const reader =
           new FileReader();
 
-
         const img =
           new Image();
-
 
         reader.onload =
           () => {
@@ -1760,16 +1274,13 @@ export default function App() {
                     "canvas"
                   );
 
-
                 const scale =
                   Math.min(
                     maxSize /
                       img.width,
-
                     maxSize /
                       img.height
                   );
-
 
                 canvas.width =
                   Math.round(
@@ -1777,19 +1288,16 @@ export default function App() {
                       scale
                   );
 
-
                 canvas.height =
                   Math.round(
                     img.height *
                       scale
                   );
 
-
                 const ctx =
                   canvas.getContext(
                     "2d"
                   );
-
 
                 ctx.drawImage(
                   img,
@@ -1799,7 +1307,6 @@ export default function App() {
                   canvas.height
                 );
 
-
                 resolve(
                   canvas.toDataURL(
                     "image/jpeg",
@@ -1808,19 +1315,15 @@ export default function App() {
                 );
               };
 
-
             img.onerror =
               reject;
-
 
             img.src =
               reader.result;
           };
 
-
         reader.onerror =
           reject;
-
 
         reader.readAsDataURL(
           file
@@ -1829,21 +1332,14 @@ export default function App() {
     );
   };
 
-
-  // =======================================================
-  // 파일 선택
-  // =======================================================
-
   const handleFileChange =
     async (e) => {
       const file =
         e.target.files[0];
 
-
       if (!file) {
         return;
       }
-
 
       try {
         const base64 =
@@ -1851,45 +1347,35 @@ export default function App() {
             file
           );
 
-
         const thumbnail =
           await makeThumbnail(
             file
           );
 
-
         setPreviewUrl(
           base64
         );
-
 
         setThumbnailBase64(
           thumbnail
         );
 
+        setResult(null);
 
-        setResult(
-          null
+        setShowAIModal(
+          false
         );
 
-
-        setSimilarities(
-          DEFAULT_SIMILARITIES
+        setShowPhaseModal(
+          false
         );
 
+        setShowSimilarModal(
+          false
+        );
 
         setShowGradcamModal(
           false
-        );
-
-
-        setShowSimilar(
-          false
-        );
-
-
-        setSimilarIndex(
-          0
         );
       } catch (err) {
         console.error(
@@ -1897,64 +1383,11 @@ export default function App() {
           err
         );
 
-
         alert(
           "이미지를 불러오는 중 오류가 발생했습니다."
         );
       }
     };
-
-
-  // =======================================================
-  // 파손 유형별 확률 업데이트
-  // =======================================================
-
-  const updateSimilarities =
-    (data) => {
-      const mapped =
-        {};
-
-
-      const highlightedTypes =
-        data.highlighted_types ||
-        [
-          data.prediction,
-        ];
-
-
-      FRACTURE_TYPES.forEach(
-        (type) => {
-          mapped[type] =
-            {
-              sim:
-                data
-                  .similarities?.[
-                  type
-                ] ??
-                "—",
-
-              best:
-                type ===
-                data.prediction,
-
-              mixed:
-                highlightedTypes.includes(
-                  type
-                ),
-            };
-        }
-      );
-
-
-      setSimilarities(
-        mapped
-      );
-    };
-
-
-  // =======================================================
-  // 기록 저장
-  // =======================================================
 
   const saveHistory = (
     data,
@@ -1962,7 +1395,6 @@ export default function App() {
   ) => {
     const hasNewMasks =
       !!data.gradcam_masks;
-
 
     const historyResult =
       {
@@ -1977,10 +1409,8 @@ export default function App() {
             : data.gradcam_layers,
       };
 
-
     const newItem = {
-      id:
-        Date.now(),
+      id: Date.now(),
 
       time:
         new Date().toLocaleString(),
@@ -1992,7 +1422,6 @@ export default function App() {
         historyResult,
     };
 
-
     const updatedHistory =
       [
         newItem,
@@ -2002,11 +1431,9 @@ export default function App() {
         10
       );
 
-
     setHistory(
       updatedHistory
     );
-
 
     try {
       localStorage.setItem(
@@ -2021,7 +1448,6 @@ export default function App() {
         err
       );
 
-
       const lighterHistory =
         [
           newItem,
@@ -2031,11 +1457,9 @@ export default function App() {
           5
         );
 
-
       setHistory(
         lighterHistory
       );
-
 
       localStorage.setItem(
         "analysisHistory",
@@ -2044,17 +1468,11 @@ export default function App() {
         )
       );
 
-
       alert(
         "이미지 용량이 커서 최근 5개 기록만 저장했습니다."
       );
     }
   };
-
-
-  // =======================================================
-  // 기록 클릭
-  // =======================================================
 
   const handleHistoryClick =
     (item) => {
@@ -2062,48 +1480,36 @@ export default function App() {
         item.result
       );
 
-
       setPreviewUrl(
         item.image
       );
-
 
       setThumbnailBase64(
         item.image
       );
 
-
       setMaterial(
-        item.result.material ||
+        item.result
+          .material ||
           ""
       );
 
-
-      updateSimilarities(
-        item.result
+      setShowAIModal(
+        false
       );
 
+      setShowPhaseModal(
+        false
+      );
+
+      setShowSimilarModal(
+        false
+      );
 
       setShowGradcamModal(
         false
       );
-
-
-      setShowSimilar(
-        false
-      );
-
-
-      setSimilarIndex(
-        0
-      );
     };
-
-
-  // =======================================================
-  // 비교 선택
-  // 최대 2개
-  // =======================================================
 
   const toggleCompareSelect =
     (id) => {
@@ -2121,7 +1527,6 @@ export default function App() {
             );
           }
 
-
           if (
             prev.length >=
             2
@@ -2130,10 +1535,8 @@ export default function App() {
               "비교는 최대 2개까지 선택할 수 있습니다."
             );
 
-
             return prev;
           }
-
 
           return [
             ...prev,
@@ -2143,42 +1546,26 @@ export default function App() {
       );
     };
 
-
-  // =======================================================
-  // 기록 삭제
-  // =======================================================
-
   const clearHistory =
     () => {
-      setHistory(
-        []
-      );
-
+      setHistory([]);
 
       setSelectedCompareIds(
         []
       );
 
-
       setShowCompareModal(
         false
       );
-
 
       setCompareSummary(
         null
       );
 
-
       localStorage.removeItem(
         "analysisHistory"
       );
     };
-
-
-  // =======================================================
-  // 이미지 분석
-  // =======================================================
 
   const handleUpload =
     async () => {
@@ -2186,13 +1573,11 @@ export default function App() {
         fileRef.current
           ?.files[0];
 
-
       if (!file) {
         return alert(
           "이미지를 먼저 선택해주세요."
         );
       }
-
 
       if (!material) {
         return alert(
@@ -2200,28 +1585,23 @@ export default function App() {
         );
       }
 
-
       const formData =
         new FormData();
-
 
       formData.append(
         "file",
         file
       );
 
-
       formData.append(
         "material",
         material
       );
 
-
       try {
         setUploading(
           true
         );
-
 
         const res =
           await fetch(
@@ -2229,12 +1609,10 @@ export default function App() {
             {
               method:
                 "POST",
-
               body:
                 formData,
             }
           );
-
 
         if (!res.ok) {
           throw new Error(
@@ -2242,47 +1620,27 @@ export default function App() {
           );
         }
 
-
         const data =
           await res.json();
-
 
         console.log(
           "백엔드 응답:",
           data
         );
 
-
         setResult(
           data
         );
 
-
-        updateSimilarities(
-          data
-        );
-
-
         saveHistory(
           data,
           thumbnailBase64
-        );
-
-
-        setShowSimilar(
-          false
-        );
-
-
-        setSimilarIndex(
-          0
         );
       } catch (err) {
         console.error(
           "분석 결과 처리 오류:",
           err
         );
-
 
         alert(
           "분석 결과 처리 중 오류가 발생했습니다. 콘솔을 확인해주세요."
@@ -2294,10 +1652,27 @@ export default function App() {
       }
     };
 
+  const openCompare =
+    () => {
+      if (
+        selectedCompareIds.length <
+        2
+      ) {
+        alert(
+          "왼쪽 분석 기록에서 비교할 결과 2개를 선택해주세요."
+        );
 
-  // =======================================================
-  // LLM 비교
-  // =======================================================
+        return;
+      }
+
+      setCompareSummary(
+        null
+      );
+
+      setShowCompareModal(
+        true
+      );
+    };
 
   const handleCompareWithLLM =
     async () => {
@@ -2306,24 +1681,20 @@ export default function App() {
         2
       ) {
         alert(
-          "비교할 기록을 2개 이상 선택해주세요."
+          "비교할 기록을 2개 선택해주세요."
         );
-
 
         return;
       }
-
 
       try {
         setCompareLoading(
           true
         );
 
-
         setCompareSummary(
           null
         );
-
 
         const payload = {
           items:
@@ -2332,7 +1703,6 @@ export default function App() {
                 item.result
             ),
         };
-
 
         const res =
           await fetch(
@@ -2353,23 +1723,19 @@ export default function App() {
             }
           );
 
-
         if (!res.ok) {
           throw new Error(
             `비교 분석 오류: ${res.status}`
           );
         }
 
-
         const data =
           await res.json();
-
 
         console.log(
           "비교 API 응답:",
           data
         );
-
 
         setCompareSummary(
           data
@@ -2379,7 +1745,6 @@ export default function App() {
           "LLM 비교 설명 오류:",
           err
         );
-
 
         alert(
           "LLM 비교 설명 생성 중 오류가 발생했습니다."
@@ -2391,11 +1756,6 @@ export default function App() {
       }
     };
 
-
-  // =======================================================
-  // UI
-  // =======================================================
-
   return (
     <div
       className={
@@ -2404,10 +1764,7 @@ export default function App() {
     >
       <div className="flex min-h-screen">
 
-        {/* =================================================
-            사이드바 토글
-        ================================================= */}
-
+        {/* 사이드바 열고 닫기 */}
         <button
           onClick={() =>
             setSidebarOpen(
@@ -2425,11 +1782,7 @@ export default function App() {
             : "›"}
         </button>
 
-
-        {/* =================================================
-            분석 기록 사이드바
-        ================================================= */}
-
+        {/* 분석 기록 사이드바 */}
         <aside
           className={`fixed lg:sticky top-0 left-0 z-40 h-screen bg-white border-r border-slate-200 transition-all duration-300 overflow-y-auto overflow-x-hidden ${
             sidebarOpen
@@ -2437,11 +1790,16 @@ export default function App() {
               : "w-0 -translate-x-full p-0 border-none"
           }`}
         >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold whitespace-nowrap">
-              분석 기록
-            </h2>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-[11px] tracking-[0.16em] uppercase text-slate-400 font-semibold">
+                Analysis History
+              </p>
 
+              <h2 className="text-lg font-bold mt-1 whitespace-nowrap">
+                분석 기록
+              </h2>
+            </div>
 
             {history.length >
               0 && (
@@ -2456,74 +1814,62 @@ export default function App() {
             )}
           </div>
 
-
           {history.length >
             0 && (
-            <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-100">
-              <p className="text-xs text-blue-700 mb-2">
-                비교할 기록을
-                2개
-                선택하세요.
+            <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <p className="text-xs text-slate-500 leading-5">
+                결과 2개를 선택하면
+                비교할 수 있습니다.
               </p>
 
-
               <button
-                onClick={() => {
-                  setCompareSummary(
-                    null
-                  );
-
-                  setShowCompareModal(
-                    true
-                  );
-                }}
+                onClick={
+                  openCompare
+                }
                 disabled={
                   selectedCompareIds.length <
                   2
                 }
-                className="w-full rounded-lg bg-blue-600 text-white py-2 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition"
+                className="mt-2 w-full rounded-lg bg-slate-900 text-white py-2 text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-700 transition"
               >
-                비교하기 (
+                선택 결과 비교 (
                 {
                   selectedCompareIds.length
                 }
-                )
+                /2)
               </button>
             </div>
           )}
 
-
-          <div className="space-y-3">
+          <div className="space-y-2">
             {history.length ===
               0 && (
-              <p className="text-sm text-slate-400">
-                아직 분석
-                기록이
-                없습니다.
-              </p>
+              <div className="rounded-xl bg-slate-50 border border-dashed p-5 text-center">
+                <p className="text-sm text-slate-400">
+                  아직 분석 기록이
+                  없습니다.
+                </p>
+              </div>
             )}
-
 
             {history.map(
               (item) => {
                 const itemResult =
                   item.result;
 
-
                 const itemMaterial =
                   MATERIAL_LABELS[
                     itemResult
                       .material
                   ] ||
-                  itemResult.material ||
+                  itemResult
+                    .material ||
                   "-";
-
 
                 const checked =
                   selectedCompareIds.includes(
                     item.id
                   );
-
 
                 return (
                   <div
@@ -2538,7 +1884,7 @@ export default function App() {
                     className={`relative w-full text-left p-3 rounded-xl border transition cursor-pointer ${
                       checked
                         ? "bg-blue-50 border-blue-400"
-                        : "bg-slate-50 hover:border-blue-300 hover:bg-blue-50"
+                        : "bg-white hover:border-slate-400 hover:bg-slate-50 border-slate-200"
                     }`}
                   >
                     <input
@@ -2556,9 +1902,8 @@ export default function App() {
                           item.id
                         )
                       }
-                      className="absolute top-3 right-3 w-4 h-4 accent-blue-600 cursor-pointer"
+                      className="absolute top-3 right-3 w-4 h-4 accent-slate-900 cursor-pointer"
                     />
-
 
                     <div className="flex gap-3 pr-6">
                       <div className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0">
@@ -2572,12 +1917,10 @@ export default function App() {
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400">
-                            No
-                            Image
+                            No Image
                           </div>
                         )}
                       </div>
-
 
                       <div className="min-w-0">
                         <p className="font-bold text-sm">
@@ -2587,13 +1930,12 @@ export default function App() {
                               .prediction}
                         </p>
 
-
                         <p className="text-sm text-blue-600 font-semibold">
                           {
-                            itemResult.confidence
+                            itemResult
+                              .confidence
                           }
                         </p>
-
 
                         <p className="text-xs text-slate-500 truncate">
                           {
@@ -2601,8 +1943,7 @@ export default function App() {
                           }
                         </p>
 
-
-                        <p className="text-xs text-slate-400 mt-1">
+                        <p className="text-[11px] text-slate-400 mt-1">
                           {
                             item.time
                           }
@@ -2616,87 +1957,123 @@ export default function App() {
           </div>
         </aside>
 
-
-        {/* =================================================
-            Main
-        ================================================= */}
-
+        {/* 메인 */}
         <main className="flex-1 min-w-0">
 
-          {/* Header */}
-
-          <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-20">
+          {/* 상단 바 */}
+          <header className="bg-[#172536] text-white border-b border-slate-700">
             <div
-              className={`${layout.container} py-4`}
+              className={`${layout.container} h-[68px] flex items-center justify-between`}
             >
-              <p className="text-sm font-semibold tracking-[0.2em] text-blue-600 uppercase">
-                Failure
-                Analysis
-                System
-              </p>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full border border-white/30 flex items-center justify-center text-lg">
+                  ◈
+                </div>
 
+                <div>
+                  <h1 className="font-bold text-lg leading-none">
+                    Fracture Analysis
+                    System
+                  </h1>
 
-              <h1 className="text-2xl font-bold">
-                파손단면 이미지
-                분석 웹 시스템
-              </h1>
+                  <p className="text-[10px] text-slate-300 mt-1 tracking-[0.14em] uppercase">
+                    AI Fractography
+                    Analysis
+                  </p>
+                </div>
+              </div>
             </div>
           </header>
 
-
-          {/* =================================================
-              이미지 업로드
-          ================================================= */}
-
-          <section
-            className={
-              layout.section
-            }
+          <div
+            className={`${layout.container} py-8`}
           >
-            <div className="bg-white rounded-[28px] shadow border p-8">
-              <h2 className="text-3xl font-bold mb-6 text-center">
-                이미지 업로드
+            {/* 제목 */}
+            <div className="mb-6">
+              <p className="text-xs uppercase tracking-[0.18em] text-blue-600 font-bold">
+                Failure Analysis
+              </p>
+
+              <h2 className="text-2xl font-bold mt-1">
+                파손단면 이미지 분석
               </h2>
 
+              <p className="text-sm text-slate-500 mt-2">
+                입력 이미지와 모델의
+                주요 판단 결과를 한
+                화면에서 확인합니다.
+              </p>
+            </div>
 
-              <div className="grid lg:grid-cols-[1fr_360px] gap-6 items-stretch">
+            {/* 메인 분석 카드 */}
+            <section className="bg-white rounded-[22px] border border-slate-200 shadow-sm overflow-hidden">
 
-                <label
-                  htmlFor="file-input"
-                  className="min-h-[220px] flex items-center justify-center border-2 border-dashed border-slate-300 rounded-2xl p-4 cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition"
-                >
-                  {previewUrl ? (
-                    <img
-                      src={
-                        previewUrl
-                      }
-                      alt="미리보기"
-                      className="mx-auto w-full max-h-[360px] object-contain rounded-xl"
-                    />
-                  ) : (
-                    <div className="text-center">
-                      <p className="text-slate-500 mb-4">
-                        파손단면
-                        이미지를
-                        업로드하세요
-                      </p>
+              <div className="grid xl:grid-cols-[1.05fr_1.05fr_0.8fr] min-h-[430px]">
 
+                {/* 입력 이미지 */}
+                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-base">
+                      입력 이미지
+                    </h3>
 
-                      <span className="inline-block px-5 py-3 bg-slate-900 text-white rounded-xl text-sm">
-                        파일 선택
-                      </span>
-                    </div>
-                  )}
-                </label>
+                    {previewUrl && (
+                      <button
+                        onClick={() =>
+                          fileRef.current?.click()
+                        }
+                        className="text-xs text-blue-600 font-semibold hover:text-blue-800"
+                      >
+                        이미지 변경
+                      </button>
+                    )}
+                  </div>
 
+                  <label
+                    htmlFor="file-input"
+                    className="h-[300px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-pointer"
+                  >
+                    {previewUrl ? (
+                      <img
+                        src={
+                          previewUrl
+                        }
+                        alt="입력 이미지"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="text-center px-5">
+                        <div className="w-12 h-12 rounded-full bg-slate-200 mx-auto flex items-center justify-center text-xl mb-3">
+                          +
+                        </div>
 
-                <div className="bg-slate-50 border rounded-2xl p-5 flex flex-col justify-center gap-4">
-                  <div className="text-left">
-                    <p className="text-sm font-semibold text-slate-500 mb-2">
-                      분석 조건
-                    </p>
+                        <p className="font-semibold text-slate-700">
+                          파손단면 이미지를
+                          업로드하세요
+                        </p>
 
+                        <p className="text-xs text-slate-400 mt-2">
+                          클릭하여 이미지
+                          선택
+                        </p>
+                      </div>
+                    )}
+                  </label>
 
+                  <input
+                    id="file-input"
+                    type="file"
+                    accept="image/*"
+                    ref={
+                      fileRef
+                    }
+                    onChange={
+                      handleFileChange
+                    }
+                    className="hidden"
+                  />
+
+                  <div className="mt-4 flex gap-3">
                     <select
                       value={
                         material
@@ -2705,19 +2082,17 @@ export default function App() {
                         e
                       ) =>
                         setMaterial(
-                          e.target
-                            .value
+                          e.target.value
                         )
                       }
-                      className={`${layout.select} w-full`}
+                      className="flex-1 h-11 px-3 rounded-lg border border-slate-300 bg-white text-sm outline-none focus:border-blue-500"
                     >
                       <option value="">
                         재질 선택
                       </option>
 
                       <option value="steel">
-                        강
-                        (Steel)
+                        강 (Steel)
                       </option>
 
                       <option value="stainless_steel">
@@ -2741,8 +2116,7 @@ export default function App() {
                       </option>
 
                       <option value="magnesium">
-                        마그네슘
-                        합금
+                        마그네슘 합금
                       </option>
 
                       <option value="nickel_alloy">
@@ -2757,401 +2131,39 @@ export default function App() {
                         모름
                       </option>
                     </select>
+
+                    <button
+                      onClick={
+                        handleUpload
+                      }
+                      disabled={
+                        uploading
+                      }
+                      className="px-7 h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-50 transition"
+                    >
+                      {uploading
+                        ? "분석 중..."
+                        : "분석 시작"}
+                    </button>
                   </div>
+                </div>
 
+                {/* Grad-CAM */}
+                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="font-bold text-base">
+                        Grad-CAM++ 결과
+                      </h3>
 
-                  <button
-                    onClick={
-                      handleUpload
-                    }
-                    disabled={
-                      uploading
-                    }
-                    className="w-full rounded-xl bg-slate-900 text-white py-3 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800 transition"
-                  >
-                    {uploading
-                      ? "분석 중…"
-                      : "분석 시작"}
-                  </button>
-
-
-                  <p className="text-xs text-slate-400 leading-5">
-                    재질 정보는
-                    파손 유형 설명을
-                    보조하는 참고
-                    정보로
-                    사용됩니다.
-                  </p>
-
-
-                  {result
-                    ?.similar_images
-                    ?.length >
-                    0 && (
-                    <div className="pt-3 border-t border-slate-200">
-                      <button
-                        onClick={() =>
-                          setShowSimilar(
-                            (
-                              prev
-                            ) =>
-                              !prev
-                          )
-                        }
-                        className="w-full rounded-xl bg-white border border-slate-300 text-slate-800 py-2 text-sm font-semibold hover:bg-slate-100 transition"
-                      >
-                        {showSimilar
-                          ? "유사 사례 숨기기 ▲"
-                          : "유사 사례 보기 ▼"}
-                      </button>
-
-
-                      {showSimilar && (
-                        <div className="mt-4 rounded-2xl bg-white border p-3 overflow-hidden">
-                          <p className="text-sm font-bold text-slate-700 text-center mb-3">
-                            유사 사례
-                            Top{" "}
-                            {similarIndex +
-                              1}
-                          </p>
-
-
-                          <div className="grid grid-cols-[28px_1fr_28px] items-center gap-2 w-full">
-                            <button
-                              onClick={() =>
-                                setSimilarIndex(
-                                  (
-                                    prev
-                                  ) =>
-                                    prev ===
-                                    0
-                                      ? result
-                                          .similar_images
-                                          .length -
-                                        1
-                                      : prev -
-                                        1
-                                )
-                              }
-                              className="w-7 h-7 rounded-full bg-slate-50 border text-slate-700 font-bold hover:bg-slate-100"
-                            >
-                              ‹
-                            </button>
-
-
-                            <div className="w-full h-44 overflow-hidden rounded-xl border bg-white">
-                              <img
-                                src={`http://localhost:8000${
-                                  result
-                                    .similar_images[
-                                    similarIndex
-                                  ]
-                                    .image_url
-                                }`}
-                                alt="유사 사례 이미지"
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-
-
-                            <button
-                              onClick={() =>
-                                setSimilarIndex(
-                                  (
-                                    prev
-                                  ) =>
-                                    prev ===
-                                    result
-                                      .similar_images
-                                      .length -
-                                      1
-                                      ? 0
-                                      : prev +
-                                        1
-                                )
-                              }
-                              className="w-7 h-7 rounded-full bg-slate-50 border text-slate-700 font-bold hover:bg-slate-100"
-                            >
-                              ›
-                            </button>
-                          </div>
-
-
-                          <p className="mt-2 text-xs text-slate-500 text-center">
-                            입력 이미지와
-                            같은 유형 내
-                            유사 사례{" "}
-                            {similarIndex +
-                              1}{" "}
-                            /{" "}
-                            {
-                              result
-                                .similar_images
-                                .length
-                            }
-                          </p>
-                        </div>
-                      )}
+                      <p className="text-xs text-slate-400 mt-1">
+                        모델이 판단에
+                        활용한 영역
+                      </p>
                     </div>
-                  )}
-                </div>
-              </div>
 
-
-              <input
-                id="file-input"
-                type="file"
-                accept="image/*"
-                ref={
-                  fileRef
-                }
-                onChange={
-                  handleFileChange
-                }
-                className="hidden"
-              />
-
-
-              {previewUrl && (
-                <p className="mt-3 text-sm text-slate-400 text-center">
-                  다른 이미지를
-                  선택하려면 이미지
-                  영역을 다시
-                  클릭하세요.
-                </p>
-              )}
-            </div>
-          </section>
-
-
-          {/* =================================================
-              파손 유형 카드
-          ================================================= */}
-
-          <section
-            className={
-              layout.section
-            }
-          >
-            <div className="mb-6">
-              <h2 className="text-3xl font-bold">
-                유사도 기반 파손
-                유형 비교
-              </h2>
-
-
-              <p className="text-slate-500 mt-2">
-                혼합 가능성이
-                있으면 새 카드를
-                추가하지 않고 상위
-                두 유형 카드가 함께
-                강조됩니다.
-              </p>
-            </div>
-
-
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 items-start">
-              {FRACTURE_TYPES.map(
-                (type) => (
-                  <FlipCard
-                    key={
-                      type
-                    }
-                    type={
-                      type
-                    }
-                    similarity={
-                      similarities[
-                        type
-                      ].sim
-                    }
-                    isBest={
-                      similarities[
-                        type
-                      ].best
-                    }
-                    isMixed={
-                      similarities[
-                        type
-                      ].mixed
-                    }
-                    mixedMode={
-                      result?.is_mixed
-                    }
-                    imageSlot={
-                      <img
-                        src={
-                          FRACTURE_IMAGES[
-                            type
-                          ]
-                        }
-                        alt={
-                          type
-                        }
-                        className="w-full h-full object-cover rounded-xl"
-                      />
-                    }
-                  />
-                )
-              )}
-            </div>
-          </section>
-
-
-          {/* =================================================
-              최종 분석 결과
-          ================================================= */}
-
-          {result && (
-            <section
-              className={
-                layout.section
-              }
-            >
-              <div
-                className={
-                  layout.card
-                }
-              >
-                <h3 className="text-2xl font-bold mb-6">
-                  최종 분석 결과
-                </h3>
-
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-                  <div
-                    className={
-                      layout.resultBox
-                    }
-                  >
-                    <p className="text-sm text-slate-500">
-                      파손 유형
-                    </p>
-
-                    <p className="text-lg font-bold">
-                      {result
-                        .display_prediction ||
-                        result.prediction}
-                    </p>
-                  </div>
-
-
-                  <div
-                    className={
-                      layout.resultBox
-                    }
-                  >
-                    <p className="text-sm text-slate-500">
-                      예측 확률
-                    </p>
-
-                    <p className="text-lg font-bold">
-                      {
-                        result.confidence
-                      }
-                    </p>
-                  </div>
-
-
-                  <div
-                    className={
-                      layout.resultBox
-                    }
-                  >
-                    <p className="text-sm text-slate-500">
-                      재질
-                    </p>
-
-                    <p className="text-lg font-bold">
-                      {
-                        materialText
-                      }
-                    </p>
-                  </div>
-                </div>
-
-
-                <div className="grid md:grid-cols-2 gap-4 mb-6">
-                  <div
-                    className={
-                      layout.resultBox
-                    }
-                  >
-                    <p className="text-sm text-slate-500">
-                      주요 특징
-                    </p>
-
-                    <p className="text-lg font-semibold leading-7">
-                      {
-                        result.feature
-                      }
-                    </p>
-                  </div>
-
-
-                  <div
-                    className={
-                      layout.resultBox
-                    }
-                  >
-                    <p className="text-sm text-slate-500">
-                      유형 기반 예상
-                      사고 원인
-                    </p>
-
-                    <p className="text-lg font-semibold leading-7">
-                      {
-                        result.expected_cause
-                      }
-                    </p>
-                  </div>
-                </div>
-
-
-                <div
-                  className={`rounded-2xl border p-4 mb-6 ${confidenceStyle}`}
-                >
-                  <p className="text-sm font-semibold">
-                    예측 확률 상태
-                    안내
-                  </p>
-
-                  <p className="text-sm mt-1">
-                    {
-                      result.confidence_message
-                    }
-                  </p>
-                </div>
-
-
-                <div className="grid lg:grid-cols-2 gap-6">
-
-                  {/* 판단 근거 */}
-
-                  <div className="p-5 bg-slate-50 rounded-2xl border">
-                    <h4 className="text-xl font-semibold mb-3">
-                      판단 근거 설명
-                    </h4>
-
-                    <p className="text-slate-700 leading-7">
-                      {
-                        result.explanation
-                      }
-                    </p>
-                  </div>
-
-
-                  {/* Grad-CAM */}
-
-                  <div className="p-5 bg-slate-50 rounded-2xl border">
-                    <div className="flex items-center justify-between mb-3">
-                      <h4 className="text-xl font-semibold">
-                        Grad-CAM++
-                        영역 시각화
-                      </h4>
-
-
-                      {(result.gradcam_masks ||
+                    {result &&
+                      (result.gradcam_masks ||
                         result.gradcam_layers) && (
                         <button
                           onClick={() =>
@@ -3159,322 +2171,660 @@ export default function App() {
                               true
                             )
                           }
-                          className="text-xs px-3 py-1 rounded-full bg-slate-900 text-white hover:bg-slate-700 transition"
+                          className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition"
                         >
-                          크게 보기
+                          확대 보기
                         </button>
                       )}
-                    </div>
+                  </div>
 
+                  {result &&
+                  (result.gradcam_masks ||
+                    result.gradcam_layers) ? (
+                    <GradcamView
+                      result={
+                        result
+                      }
+                      chipSize="text-[11px]"
+                      canvasClass="h-[300px]"
+                    />
+                  ) : (
+                    <div className="h-[300px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
+                      <div className="text-center">
+                        <p className="text-sm font-semibold text-slate-500">
+                          분석 전
+                        </p>
 
-                    {(result.gradcam_masks ||
-                      result.gradcam_layers) ? (
-                      <GradcamView
-                        result={
-                          result
-                        }
-                        chipSize="text-xs"
-                        canvasClass="h-[260px]"
-                      />
-                    ) : (
-                      <div className="w-full h-[260px] rounded-xl border bg-white flex items-center justify-center">
-                        <p className="text-slate-500 font-medium">
-                          Grad-CAM++
-                          결과가
-                          없습니다.
+                        <p className="text-xs text-slate-400 mt-2">
+                          분석을 실행하면
+                          시각화 결과가
+                          표시됩니다.
                         </p>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 결과 */}
+                <div className="p-5">
+                  <h3 className="font-bold text-base mb-4">
+                    분석 결과
+                  </h3>
+
+                  {result ? (
+                    <>
+                      <div className="rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 border border-blue-100 py-7 px-5 text-center">
+                        <p className="text-xs text-slate-500 uppercase tracking-[0.16em]">
+                          Predicted
+                          fracture
+                        </p>
+
+                        <p className="text-3xl font-black text-blue-700 mt-3">
+                          {result
+                            .display_prediction ||
+                            result
+                              .prediction}
+                        </p>
+
+                        <p className="text-4xl font-black text-slate-900 mt-2">
+                          {
+                            result
+                              .confidence
+                          }
+                        </p>
+
+                        <span
+                          className={`inline-block mt-4 px-3 py-1 rounded-full border text-xs font-bold ${confidenceStyle}`}
+                        >
+                          신뢰도{" "}
+                          {
+                            confidenceLabel
+                          }
+                        </span>
+                      </div>
+
+                      {/* 전체 예측 확률 */}
+                      {result.similarities && (
+                        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-xs font-bold text-slate-600">
+                              전체 예측 확률
+                            </p>
+
+                            <p className="text-[10px] text-slate-400">
+                              Softmax
+                            </p>
+                          </div>
+
+                          <div className="space-y-3">
+                            {Object.entries(result.similarities)
+                              .sort(
+                                (a, b) =>
+                                  parseFloat(b[1]) - parseFloat(a[1])
+                              )
+                              .map(([name, value]) => {
+                                const percent = Math.max(
+                                  0,
+                                  Math.min(
+                                    100,
+                                    parseFloat(value) || 0
+                                  )
+                                );
+
+                                const isPredicted =
+                                  name === result.display_prediction ||
+                                  EN_NAMES[name] === result.prediction;
+
+                                return (
+                                  <div key={name}>
+                                    <div className="flex items-center justify-between gap-3 mb-1">
+                                      <span
+                                        className={`text-[11px] ${
+                                          isPredicted
+                                            ? "font-bold text-slate-900"
+                                            : "font-medium text-slate-500"
+                                        }`}
+                                      >
+                                        {name}
+                                      </span>
+
+                                      <span
+                                        className={`text-[11px] tabular-nums ${
+                                          isPredicted
+                                            ? "font-bold text-blue-700"
+                                            : "font-semibold text-slate-500"
+                                        }`}
+                                      >
+                                        {typeof value === "number"
+                                          ? `${value.toFixed(1)}%`
+                                          : value}
+                                      </span>
+                                    </div>
+
+                                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-500 ${
+                                          isPredicted
+                                            ? "bg-blue-600"
+                                            : "bg-slate-300"
+                                        }`}
+                                        style={{
+                                          width: `${percent}%`,
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="rounded-lg border border-slate-200 p-3">
+                          <p className="text-[11px] text-slate-400">
+                            재질
+                          </p>
+
+                          <p className="text-sm font-bold mt-1">
+                            {
+                              materialText
+                            }
+                          </p>
+                        </div>
+
+                        <div className="rounded-lg border border-slate-200 p-3">
+                          <p className="text-[11px] text-slate-400">
+                            상태
+                          </p>
+
+                          <p className="text-sm font-bold mt-1">
+                            {
+                              confidenceLabel
+                            }
+                          </p>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`mt-3 rounded-lg border p-3 ${confidenceStyle}`}
+                      >
+                        <p className="text-xs leading-5">
+                          {
+                            result
+                              .confidence_message
+                          }
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="h-[300px] rounded-xl bg-slate-50 border border-dashed border-slate-300 flex items-center justify-center">
+                      <div className="text-center px-5">
+                        <p className="text-sm font-semibold text-slate-500">
+                          분석 결과 없음
+                        </p>
+
+                        <p className="text-xs text-slate-400 mt-2">
+                          이미지를 선택하고
+                          분석을 시작하세요.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 기능 버튼 */}
+              <div className="border-t border-slate-200 p-5">
+                <div className="grid md:grid-cols-3 gap-3">
+
+                  <button
+                    onClick={() => {
+                      if (
+                        !result
+                      ) {
+                        alert(
+                          "먼저 이미지를 분석해주세요."
+                        );
+
+                        return;
+                      }
+
+                      setShowAIModal(
+                        true
+                      );
+                    }}
+                    className="group rounded-xl bg-blue-600 hover:bg-blue-700 text-white p-4 text-left transition shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
+                        AI
+                      </div>
+
+                      <div>
+                        <p className="font-bold">
+                          AI 상세 분석
+                        </p>
+
+                        <p className="text-xs text-blue-100 mt-0.5">
+                          LLM 설명
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (
+                        !result
+                      ) {
+                        alert(
+                          "먼저 이미지를 분석해주세요."
+                        );
+
+                        return;
+                      }
+
+                      setShowPhaseModal(
+                        true
+                      );
+                    }}
+                    className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white p-4 text-left transition shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
+                        P
+                      </div>
+
+                      <div>
+                        <p className="font-bold">
+                          Phase 분석
+                        </p>
+
+                        <p className="text-xs text-emerald-100 mt-0.5">
+                          영역별 조직 분석
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (
+                        !result
+                      ) {
+                        alert(
+                          "먼저 이미지를 분석해주세요."
+                        );
+
+                        return;
+                      }
+
+                      setShowSimilarModal(
+                        true
+                      );
+                    }}
+                    className="rounded-xl bg-violet-600 hover:bg-violet-700 text-white p-4 text-left transition shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
+                        ≋
+                      </div>
+
+                      <div>
+                        <p className="font-bold">
+                          유사 이미지
+                        </p>
+
+                        <p className="text-xs text-violet-100 mt-0.5">
+                          Top-3 사례
+                        </p>
+                      </div>
+                    </div>
+                  </button>
                 </div>
               </div>
             </section>
-          )}
+
+            <div className="mt-5 flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">
+              <div className="w-2 h-2 rounded-full bg-blue-600 mt-2 shrink-0" />
+
+              <p className="text-sm text-slate-500 leading-6">
+                메인 화면에서는 최종 파손 유형과 전체 예측 확률을
+                함께 제공합니다. 상세 특징과 예상 원인은 AI 상세 분석에서,
+                유사 사례는 유사 이미지에서 확인할 수 있으며 분석 결과 비교는
+                왼쪽 분석 기록에서 두 결과를 선택해 실행할 수 있습니다.
+              </p>
+            </div>
+          </div>
         </main>
       </div>
 
+      {/* AI 상세 분석 */}
+      {showAIModal &&
+        result && (
+          <ModalShell
+            title="AI 상세 분석"
+            subtitle="Gemma 기반 파손단면 분석 설명"
+            onClose={() =>
+              setShowAIModal(
+                false
+              )
+            }
+            maxWidth="max-w-4xl"
+          >
+            <div className="space-y-4">
 
-      {/* ===================================================
-          비교 Modal
-      =================================================== */}
+              <div className="rounded-xl border border-slate-200 p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
+                    1
+                  </span>
 
-      {showCompareModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
-          <div className="bg-white rounded-3xl max-w-[70vw] w-full max-h-[90vh] overflow-y-auto p-8 shadow-2xl">
+                  <h4 className="font-bold">
+                    주요 특징
+                  </h4>
+                </div>
 
-            {/* Header */}
-
-            <div className="flex items-start justify-between gap-4 mb-5">
-              <div>
-                <h3 className="text-2xl font-bold">
-                  분석 결과 비교
-                </h3>
-
-
-                <p className="text-sm text-slate-500 mt-1">
-                  선택한 분석
-                  기록의 이미지,
-                  예측 유형, 예측
-                  확률, 재질,
-                  설명을
-                  비교합니다.
+                <p className="text-sm text-slate-700 leading-7">
+                  {result.feature ||
+                    "주요 특징 정보가 없습니다."}
                 </p>
-
-
-                <button
-                  onClick={
-                    handleCompareWithLLM
-                  }
-                  disabled={
-                    compareItems.length <
-                      2 ||
-                    compareLoading
-                  }
-                  className="mt-4 rounded-xl bg-blue-600 text-white px-4 py-2 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition"
-                >
-                  {compareLoading
-                    ? "비교 설명 생성 중..."
-                    : "LLM으로 비교 설명 생성"}
-                </button>
               </div>
 
+              <div className="rounded-xl border border-slate-200 p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
+                    2
+                  </span>
 
-              <button
-                onClick={() =>
-                  setShowCompareModal(
-                    false
-                  )
-                }
-                className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm hover:bg-slate-700 transition"
+                  <h4 className="font-bold">
+                    판단 근거 설명
+                  </h4>
+                </div>
+
+                <p className="text-sm text-slate-700 leading-7 whitespace-pre-line">
+                  {result.explanation ||
+                    "설명 정보가 없습니다."}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="w-7 h-7 rounded-full bg-amber-500 text-white flex items-center justify-center text-xs font-bold">
+                    3
+                  </span>
+
+                  <h4 className="font-bold">
+                    예상 원인
+                  </h4>
+                </div>
+
+                <p className="text-sm text-slate-700 leading-7">
+                  {result.expected_cause ||
+                    "예상 원인 정보가 없습니다."}
+                </p>
+              </div>
+
+              <div
+                className={`rounded-xl border p-5 ${confidenceStyle}`}
               >
-                닫기
-              </button>
+                <p className="font-bold text-sm">
+                  분석 신뢰도 안내
+                </p>
+
+                <p className="text-sm leading-6 mt-2">
+                  {
+                    result.confidence_message
+                  }
+                </p>
+              </div>
+
+              <p className="text-xs text-slate-400 leading-5">
+                본 설명은 이미지 및 입력
+                정보를 기반으로 생성된 AI
+                분석 결과이며 실제 사고
+                원인을 확정하는 정보가
+                아닙니다.
+              </p>
             </div>
+          </ModalShell>
+        )}
 
+      {/* Phase 분석 */}
+      {showPhaseModal &&
+        result && (
+          <ModalShell
+            title="Phase 분석"
+            subtitle="현미경 이미지 영역별 Phase 분류"
+            onClose={() =>
+              setShowPhaseModal(
+                false
+              )
+            }
+            maxWidth="max-w-4xl"
+          >
+            <div className="grid md:grid-cols-2 gap-6">
 
-            {/* =================================================
-                LLM 비교 결과
-            ================================================= */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 min-h-[350px] flex items-center justify-center">
+                <div className="text-center px-8">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center text-2xl font-bold">
+                    P
+                  </div>
 
-            {compareSummary && (
-              <div className="mb-6 space-y-5">
-
-                {/* 핵심 요약 */}
-
-                <div className="rounded-3xl border border-blue-200 bg-blue-50 p-6 text-blue-900">
-                  <p className="text-sm font-bold mb-2">
-                    핵심 요약
+                  <p className="font-bold text-lg mt-5">
+                    Phase segmentation
                   </p>
 
+                  <p className="text-sm text-slate-500 mt-2 leading-6">
+                    Phase 모델을 연결하면
+                    이 영역에 segmentation
+                    결과 이미지가 표시됩니다.
+                  </p>
+                </div>
+              </div>
 
-                  <p className="text-2xl font-bold leading-9">
-                    {compareSummary.summary ||
-                      compareSummary.compare_summary ||
-                      "비교 요약이 없습니다."}
+              <div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+                  <p className="text-sm font-bold text-emerald-800">
+                    Phase 분석 기능 준비 중
+                  </p>
+
+                  <p className="text-sm text-emerald-700 leading-6 mt-2">
+                    현재는 프론트엔드
+                    인터페이스만 구성되어
+                    있습니다. 향후 Phase
+                    segmentation 모델 및 API
+                    연결 후 영역별 분류 결과와
+                    비율을 표시할 예정입니다.
                   </p>
                 </div>
 
-
-                {/* 공통점 / 시각적 특징 차이 */}
-
-                <div className="grid lg:grid-cols-2 gap-5">
-
-                  <div className="rounded-3xl border border-sky-200 bg-sky-50 p-5 text-sky-900">
-                    <p className="text-lg font-bold mb-3">
-                      공통점
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-slate-400">
+                      제공 예정
                     </p>
 
-                    <p className="text-sm leading-7">
-                      {compareSummary.common_point ||
-                        "공통점 정보가 없습니다."}
+                    <p className="font-semibold mt-1">
+                      Phase 영역 시각화
                     </p>
                   </div>
 
-
-                  <div className="rounded-3xl border border-indigo-200 bg-indigo-50 p-5 text-indigo-900">
-                    <p className="text-lg font-bold mb-3">
-                      시각적 특징
-                      차이
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-slate-400">
+                      제공 예정
                     </p>
 
-                    <p className="text-sm leading-7">
-                      {compareSummary.visual_difference ||
-                        "시각적 차이 정보가 없습니다."}
+                    <p className="font-semibold mt-1">
+                      Phase별 면적 비율
                     </p>
                   </div>
-                </div>
 
-
-                {/* 메커니즘 / 원인 */}
-
-                <div className="grid lg:grid-cols-2 gap-5">
-
-                  <div className="rounded-3xl border border-purple-200 bg-purple-50 p-5 text-purple-900">
-                    <p className="text-lg font-bold mb-3">
-                      파손 메커니즘
-                      차이
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-slate-400">
+                      제공 예정
                     </p>
 
-
-                    <div className="rounded-2xl bg-white/80 border border-purple-100 p-5">
-                      <p className="text-sm leading-7">
-                        {compareSummary.mechanism_difference ||
-                          "메커니즘 차이 정보가 없습니다."}
-                      </p>
-                    </div>
-                  </div>
-
-
-                  <div className="rounded-3xl border border-rose-200 bg-rose-50 p-5 text-rose-900">
-                    <p className="text-lg font-bold mb-3">
-                      예상 원인 차이
+                    <p className="font-semibold mt-1">
+                      조직 분포 분석
                     </p>
-
-
-                    <div className="rounded-2xl bg-white/80 border border-rose-100 p-5">
-                      <p className="text-sm leading-7">
-                        {compareSummary.cause_difference ||
-                          "예상 원인 차이 정보가 없습니다."}
-                      </p>
-                    </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          </ModalShell>
+        )}
 
+      {/* 유사 이미지 */}
+      {showSimilarModal &&
+        result && (
+          <ModalShell
+            title="유사 이미지"
+            subtitle="입력 이미지와 특징이 유사한 사례 Top-3"
+            onClose={() =>
+              setShowSimilarModal(
+                false
+              )
+            }
+            maxWidth="max-w-5xl"
+          >
+            {result
+              ?.similar_images
+              ?.length >
+            0 ? (
+              <div className="grid md:grid-cols-3 gap-5">
+                {result.similar_images
+                  .slice(
+                    0,
+                    3
+                  )
+                  .map(
+                    (
+                      item,
+                      index
+                    ) => (
+                      <div
+                        key={
+                          index
+                        }
+                        className="rounded-xl border border-slate-200 overflow-hidden bg-white"
+                      >
+                        <div className="h-52 bg-slate-100">
+                          <img
+                            src={`http://localhost:8000${item.image_url}`}
+                            alt={`유사 사례 ${
+                              index +
+                              1
+                            }`}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
 
-                {/* 예측 확률 */}
+                        <div className="p-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-violet-600">
+                              TOP{" "}
+                              {index +
+                                1}
+                            </span>
 
-                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
-                  <p className="text-lg font-bold mb-4">
-                    예측 확률 및
-                    해석 주의점
-                  </p>
+                            {item.similarity !==
+                              undefined && (
+                              <span className="text-sm font-bold">
+                                {typeof item.similarity ===
+                                "number"
+                                  ? `${(
+                                      item.similarity *
+                                      100
+                                    ).toFixed(
+                                      1
+                                    )}%`
+                                  : item.similarity}
+                              </span>
+                            )}
+                          </div>
 
+                          <p className="font-bold mt-2">
+                            {item.class_name ||
+                              item.label ||
+                              result.display_prediction ||
+                              result.prediction}
+                          </p>
 
-                  <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center mb-4">
-
-                    {/* 비교 1 */}
-
-                    <div>
-                      <p className="text-sm font-bold mb-2">
-                        비교 1
-                      </p>
-
-
-                      <div className="h-4 rounded-full bg-white overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-purple-500"
-                          style={{
-                            width:
-                              compareItems[
-                                0
-                              ]?.result
-                                ?.confidence ||
-                              "0%",
-                          }}
-                        />
+                          {item.filename && (
+                            <p className="text-xs text-slate-400 mt-1">
+                              {
+                                item.filename
+                              }
+                            </p>
+                          )}
+                        </div>
                       </div>
+                    )
+                  )}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 py-20 text-center">
+                <p className="font-semibold text-slate-600">
+                  유사 이미지 결과가
+                  없습니다.
+                </p>
 
-
-                      <p className="text-lg font-bold mt-3">
-                        {compareItems[
-                          0
-                        ]?.result
-                          ?.confidence ||
-                          "-"}
-                      </p>
-                    </div>
-
-
-                    <span className="rounded-full bg-white border border-amber-200 px-4 py-3 text-xs font-bold">
-                      VS
-                    </span>
-
-
-                    {/* 비교 2 */}
-
-                    <div>
-                      <p className="text-sm font-bold mb-2">
-                        비교 2
-                      </p>
-
-
-                      <div className="h-4 rounded-full bg-white overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-blue-500"
-                          style={{
-                            width:
-                              compareItems[
-                                1
-                              ]?.result
-                                ?.confidence ||
-                              "0%",
-                          }}
-                        />
-                      </div>
-
-
-                      <p className="text-lg font-bold mt-3">
-                        {compareItems[
-                          1
-                        ]?.result
-                          ?.confidence ||
-                          "-"}
-                      </p>
-                    </div>
-                  </div>
-
-
-                  <div className="rounded-2xl bg-white/80 border border-amber-100 p-5">
-                    <p className="text-sm leading-7">
-                      {compareSummary.confidence_difference ||
-                        "예측 확률 비교 정보가 없습니다."}
-                    </p>
-                  </div>
-                </div>
-
-
-                {/* 종합 해석 */}
-
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 text-slate-900">
-                  <p className="text-lg font-bold mb-3">
-                    종합 해석
-                  </p>
-
-
-                  <p className="text-sm leading-7">
-                    {compareSummary.final_opinion ||
-                      "종합 해석 정보가 없습니다."}
-                  </p>
-                </div>
-
-
-                <p className="text-xs text-slate-400">
-                  본 비교 분석은
-                  이미지와 입력
-                  정보를 바탕으로 한
-                  AI 추정 결과입니다.
-                  실제 판정에는 추가
-                  실험 및 전문가
-                  검토가 필요할 수
-                  있습니다.
+                <p className="text-sm text-slate-400 mt-2">
+                  백엔드 응답의
+                  similar_images 결과를
+                  확인해주세요.
                 </p>
               </div>
             )}
+          </ModalShell>
+        )}
 
+      {/* GradCAM 확대 */}
+      {showGradcamModal &&
+        result && (
+          <ModalShell
+            title="Grad-CAM++ 확대 보기"
+            subtitle="모델 활성화 영역을 확대하여 확인합니다."
+            onClose={() =>
+              setShowGradcamModal(
+                false
+              )
+            }
+            maxWidth="max-w-5xl"
+          >
+            <GradcamView
+              result={
+                result
+              }
+              chipSize="text-sm"
+              canvasClass="max-h-[70vh] min-h-[500px]"
+            />
+          </ModalShell>
+        )}
 
-            {/* =================================================
-                비교할 개별 결과
-            ================================================= */}
-
-            {compareItems.length <
-            2 ? (
-              <div className="rounded-2xl bg-slate-50 border p-8 text-center text-slate-500">
-                비교할 기록을
-                2개 이상
-                선택해주세요.
-              </div>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2">
+      {/* 비교 모달 */}
+      {showCompareModal && (
+        <ModalShell
+          title="분석 결과 비교"
+          subtitle="선택한 두 분석 결과의 특징과 차이를 비교합니다."
+          onClose={() =>
+            setShowCompareModal(
+              false
+            )
+          }
+          maxWidth="max-w-6xl"
+        >
+          {compareItems.length <
+          2 ? (
+            <div className="rounded-xl bg-slate-50 border p-10 text-center text-slate-500">
+              비교할 기록 2개를
+              선택해주세요.
+            </div>
+          ) : (
+            <>
+              <div className="grid md:grid-cols-2 gap-5">
                 {compareItems.map(
                   (
                     item,
@@ -3483,30 +2833,28 @@ export default function App() {
                     const itemResult =
                       item.result;
 
-
                     const itemMaterial =
                       MATERIAL_LABELS[
                         itemResult
                           .material
                       ] ||
-                      itemResult.material ||
+                      itemResult
+                        .material ||
                       "-";
-
 
                     return (
                       <div
                         key={
                           item.id
                         }
-                        className="rounded-2xl border bg-slate-50 p-4"
+                        className="rounded-xl border border-slate-200 overflow-hidden"
                       >
-                        <div className="flex items-center justify-between mb-3">
-                          <p className="text-sm font-bold text-blue-600">
-                            비교{" "}
+                        <div className="bg-slate-50 px-5 py-3 border-b flex items-center justify-between">
+                          <p className="font-bold">
+                            이미지{" "}
                             {index +
                               1}
                           </p>
-
 
                           <p className="text-xs text-slate-400">
                             {
@@ -3515,112 +2863,75 @@ export default function App() {
                           </p>
                         </div>
 
-
-                        {/* 이미지 */}
-
-                        <div className="h-40 bg-white rounded-xl border overflow-hidden mb-4 flex items-center justify-center">
-                          {item.image ? (
-                            <img
-                              src={
-                                item.image
-                              }
-                              alt="비교 이미지"
-                              className="w-full h-full object-contain"
-                            />
-                          ) : (
-                            <p className="text-sm text-slate-400">
-                              No
-                              Image
-                            </p>
-                          )}
-                        </div>
-
-
-                        <div className="space-y-3">
-
-                          {/* 유형 */}
-
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
-                              파손 유형
-                            </p>
-
-                            <p className="font-bold">
-                              {itemResult
-                                .display_prediction ||
-                                itemResult
-                                  .prediction}
-                            </p>
+                        <div className="p-5">
+                          <div className="h-56 rounded-xl border bg-white overflow-hidden flex items-center justify-center">
+                            {item.image ? (
+                              <img
+                                src={
+                                  item.image
+                                }
+                                alt="비교 이미지"
+                                className="w-full h-full object-contain"
+                              />
+                            ) : (
+                              <p className="text-slate-400">
+                                No Image
+                              </p>
+                            )}
                           </div>
 
+                          <div className="mt-4 flex items-end justify-between">
+                            <div>
+                              <p className="text-xs text-slate-400">
+                                파손 유형
+                              </p>
 
-                          {/* 확률 */}
+                              <p className="text-xl font-bold mt-1">
+                                {itemResult
+                                  .display_prediction ||
+                                  itemResult
+                                    .prediction}
+                              </p>
+                            </div>
 
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
-                              예측 확률
-                            </p>
-
-                            <p className="font-bold text-blue-600">
+                            <p className="text-2xl font-black text-blue-600">
                               {
-                                itemResult.confidence
+                                itemResult
+                                  .confidence
                               }
                             </p>
                           </div>
 
-
-                          {/* 재질 */}
-
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
+                          <div className="mt-4 rounded-lg bg-slate-50 p-4">
+                            <p className="text-xs text-slate-400">
                               재질
                             </p>
 
-                            <p className="font-bold">
+                            <p className="text-sm font-semibold mt-1">
                               {
                                 itemMaterial
                               }
                             </p>
                           </div>
 
-
-                          {/* 주요 특징 */}
-
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
+                          <div className="mt-3 rounded-lg border p-4">
+                            <p className="text-xs font-bold text-slate-500">
                               주요 특징
                             </p>
 
-                            <p className="text-sm leading-6">
+                            <p className="text-sm leading-6 mt-2">
                               {itemResult.feature ||
                                 "-"}
                             </p>
                           </div>
 
-
-                          {/* 예상 원인 */}
-
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
+                          <div className="mt-3 rounded-lg border p-4">
+                            <p className="text-xs font-bold text-slate-500">
                               예상 원인
                             </p>
 
-                            <p className="text-sm leading-6">
+                            <p className="text-sm leading-6 mt-2">
                               {itemResult.expected_cause ||
-                                "-"}
-                            </p>
-                          </div>
-
-
-                          {/* 설명 */}
-
-                          <div className="bg-white rounded-xl border p-3">
-                            <p className="text-xs text-slate-500">
-                              설명
-                            </p>
-
-                            <p className="text-sm leading-6">
-                              {itemResult.explanation ||
                                 "-"}
                             </p>
                           </div>
@@ -3630,29 +2941,157 @@ export default function App() {
                   }
                 )}
               </div>
-            )}
-          </div>
-        </div>
+
+              <div className="mt-6 flex justify-center">
+                <button
+                  onClick={
+                    handleCompareWithLLM
+                  }
+                  disabled={
+                    compareLoading
+                  }
+                  className="rounded-xl bg-[#172536] text-white px-7 py-3 text-sm font-bold hover:bg-slate-700 disabled:opacity-50 transition"
+                >
+                  {compareLoading
+                    ? "비교 설명 생성 중..."
+                    : "AI 비교 설명 생성"}
+                </button>
+              </div>
+
+              {compareSummary && (
+                <div className="mt-7 space-y-4">
+
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 p-5">
+                    <p className="text-xs font-bold text-blue-600">
+                      핵심 요약
+                    </p>
+
+                    <p className="text-lg font-bold text-blue-950 leading-8 mt-2">
+                      {compareSummary.summary ||
+                        compareSummary.compare_summary ||
+                        "비교 요약이 없습니다."}
+                    </p>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+
+                    <div className="rounded-xl border p-5">
+                      <p className="font-bold">
+                        공통점
+                      </p>
+
+                      <p className="text-sm text-slate-600 leading-7 mt-2">
+                        {compareSummary.common_point ||
+                          "공통점 정보가 없습니다."}
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border p-5">
+                      <p className="font-bold">
+                        시각적 특징 차이
+                      </p>
+
+                      <p className="text-sm text-slate-600 leading-7 mt-2">
+                        {compareSummary.visual_difference ||
+                          "시각적 차이 정보가 없습니다."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-5">
+                    <p className="font-bold">
+                      파손 메커니즘 차이
+                    </p>
+
+                    <p className="text-sm text-slate-600 leading-7 mt-2">
+                      {compareSummary.mechanism_difference ||
+                        "메커니즘 차이 정보가 없습니다."}
+                    </p>
+                  </div>
+
+                  {sameCompareCause ? (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50 p-5">
+                      <p className="font-bold text-rose-800">
+                        공통 예상 원인
+                      </p>
+
+                      <p className="text-sm text-rose-700 leading-7 mt-2">
+                        {compareItems[0]
+                          ?.result
+                          ?.expected_cause ||
+                          "-"}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border p-5">
+                      <p className="font-bold">
+                        예상 원인 차이
+                      </p>
+
+                      <p className="text-sm text-slate-600 leading-7 mt-2">
+                        {compareSummary.cause_difference ||
+                          "예상 원인 차이 정보가 없습니다."}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border p-5">
+                    <p className="font-bold">
+                      예측 확률 비교
+                    </p>
+
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-5 mt-4">
+
+                      <div>
+                        <p className="text-xs text-slate-400">
+                          이미지 1
+                        </p>
+
+                        <p className="text-2xl font-black mt-1">
+                          {compareItems[
+                            0
+                          ]?.result
+                            ?.confidence ||
+                            "-"}
+                        </p>
+                      </div>
+
+                      <div className="text-slate-300 font-black">
+                        VS
+                      </div>
+
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">
+                          이미지 2
+                        </p>
+
+                        <p className="text-2xl font-black mt-1">
+                          {compareItems[
+                            1
+                          ]?.result
+                            ?.confidence ||
+                            "-"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-slate-600 leading-7 mt-4">
+                      {compareSummary.confidence_difference ||
+                        "예측 확률 비교 정보가 없습니다."}
+                    </p>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-5">
+                    본 비교 분석은 이미지와
+                    입력 정보를 기반으로 한
+                    AI 추정 결과입니다.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </ModalShell>
       )}
-
-
-      {/* ===================================================
-          Grad-CAM 확대 Modal
-      =================================================== */}
-
-      {showGradcamModal &&
-        result && (
-          <GradcamModal
-            result={
-              result
-            }
-            onClose={() =>
-              setShowGradcamModal(
-                false
-              )
-            }
-          />
-        )}
     </div>
   );
 }
