@@ -1131,10 +1131,6 @@ export default function App() {
     setShowAIModal,
   ] = useState(false);
 
-  const [
-    showPhaseModal,
-    setShowPhaseModal,
-  ] = useState(false);
 
   const [
     showSimilarModal,
@@ -1145,6 +1141,28 @@ export default function App() {
     showGradcamModal,
     setShowGradcamModal,
   ] = useState(false);
+
+  const [activeTab, setActiveTab] = useState("fracture");
+
+  const phaseFileRef = useRef(null);
+
+  const [phasePreviewUrl, setPhasePreviewUrl] = useState(null);
+
+  const handlePhaseFileChange = async (e) => {
+    const file = e.target.files[0];
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const base64 = await fileToBase64(file);
+      setPhasePreviewUrl(base64);
+    } catch (err) {
+      console.error("Phase 이미지 처리 실패:", err);
+      alert("이미지를 불러오는 중 오류가 발생했습니다.");
+    }
+  };
 
   useEffect(() => {
     try {
@@ -1366,10 +1384,6 @@ export default function App() {
           false
         );
 
-        setShowPhaseModal(
-          false
-        );
-
         setShowSimilarModal(
           false
         );
@@ -1495,10 +1509,6 @@ export default function App() {
       );
 
       setShowAIModal(
-        false
-      );
-
-      setShowPhaseModal(
         false
       );
 
@@ -1961,33 +1971,62 @@ export default function App() {
         <main className="flex-1 min-w-0">
 
           {/* 상단 바 */}
-          <header className="bg-[#172536] text-white border-b border-slate-700">
-            <div
-              className={`${layout.container} h-[68px] flex items-center justify-between`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full border border-white/30 flex items-center justify-center text-lg">
-                  ◈
-                </div>
+        <header className="bg-[#172536] text-white border-b border-slate-700">
+          <div
+            className={`${layout.container} h-[68px] grid grid-cols-[1fr_auto_1fr] items-center`}
+          >
+            {/* 로고 */}
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full border border-white/30 flex items-center justify-center text-lg">
+                ◈
+              </div>
 
-                <div>
-                  <h1 className="font-bold text-lg leading-none">
-                    Fracture Analysis
-                    System
-                  </h1>
+              <div>
+                <h1 className="font-bold text-lg leading-none">
+                  Fracture Analysis System
+                </h1>
 
-                  <p className="text-[10px] text-slate-300 mt-1 tracking-[0.14em] uppercase">
-                    AI Fractography
-                    Analysis
-                  </p>
-                </div>
+                <p className="text-[10px] text-slate-300 mt-1 tracking-[0.14em] uppercase">
+                  AI Fractography Analysis
+                </p>
               </div>
             </div>
-          </header>
+
+            {/* 분석 종류 탭 */}
+            <div className="flex items-center bg-white/10 p-1 rounded-xl border border-white/10">
+              <button
+                onClick={() => setActiveTab("fracture")}
+                className={`min-w-[150px] px-6 py-2 rounded-lg text-sm font-bold transition ${
+                  activeTab === "fracture"
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "text-slate-300 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                파단면 분석
+              </button>
+
+              <button
+                onClick={() => setActiveTab("phase")}
+                className={`min-w-[150px] px-6 py-2 rounded-lg text-sm font-bold transition ${
+                  activeTab === "phase"
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "text-slate-300 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                Phase 분석
+              </button>
+            </div>
+
+            <div />
+          </div>
+        </header>
 
           <div
             className={`${layout.container} py-8`}
           >
+            {activeTab === "fracture" ? (
+              <>
+
             {/* 제목 */}
             <div className="mb-6">
               <p className="text-xs uppercase tracking-[0.18em] text-blue-600 font-bold">
@@ -2008,11 +2047,15 @@ export default function App() {
             {/* 메인 분석 카드 */}
             <section className="bg-white rounded-[22px] border border-slate-200 shadow-sm overflow-hidden">
 
-              <div className="grid xl:grid-cols-[1.05fr_1.05fr_0.8fr] min-h-[430px]">
+              <div className="grid xl:grid-cols-[1fr_1fr_0.82fr] min-h-[665px]">
 
-                {/* 입력 이미지 */}
-                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200">
-                  <div className="flex items-center justify-between mb-4">
+                {/* =========================
+                    입력 이미지
+                ========================== */}
+                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
+
+                  {/* 제목 */}
+                  <div className="flex items-center justify-between">
                     <h3 className="font-bold text-base">
                       입력 이미지
                     </h3>
@@ -2029,136 +2072,129 @@ export default function App() {
                     )}
                   </div>
 
-                  <label
-                    htmlFor="file-input"
-                    className="h-[300px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-pointer"
-                  >
-                    {previewUrl ? (
-                      <img
-                        src={
-                          previewUrl
-                        }
-                        alt="입력 이미지"
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="text-center px-5">
-                        <div className="w-12 h-12 rounded-full bg-slate-200 mx-auto flex items-center justify-center text-xl mb-3">
-                          +
+                  {/* 이미지 + 입력 컨트롤 전체를 세로 중앙 배치 */}
+                  <div className="flex-1 flex flex-col justify-center py-5">
+
+                    <label
+                      htmlFor="file-input"
+                      className="h-[350px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-pointer"
+                    >
+                      {previewUrl ? (
+                        <img
+                          src={previewUrl}
+                          alt="입력 이미지"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="text-center px-5">
+                          <div className="w-12 h-12 rounded-full bg-slate-200 mx-auto flex items-center justify-center text-xl mb-3">
+                            +
+                          </div>
+
+                          <p className="font-semibold text-slate-700">
+                            파손단면 이미지를 업로드하세요
+                          </p>
+
+                          <p className="text-xs text-slate-400 mt-2">
+                            클릭하여 이미지 선택
+                          </p>
                         </div>
+                      )}
+                    </label>
 
-                        <p className="font-semibold text-slate-700">
-                          파손단면 이미지를
-                          업로드하세요
-                        </p>
+                    <input
+                      id="file-input"
+                      type="file"
+                      accept="image/*"
+                      ref={fileRef}
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
 
-                        <p className="text-xs text-slate-400 mt-2">
-                          클릭하여 이미지
-                          선택
-                        </p>
-                      </div>
-                    )}
-                  </label>
+                    {/* 재질 + 분석 버튼 */}
+                    <div className="mt-4 flex gap-3">
+                      <select
+                        value={material}
+                        onChange={(e) =>
+                          setMaterial(
+                            e.target.value
+                          )
+                        }
+                        className="flex-1 h-11 px-3 rounded-lg border border-slate-300 bg-white text-sm outline-none focus:border-blue-500"
+                      >
+                        <option value="">
+                          재질 선택
+                        </option>
 
-                  <input
-                    id="file-input"
-                    type="file"
-                    accept="image/*"
-                    ref={
-                      fileRef
-                    }
-                    onChange={
-                      handleFileChange
-                    }
-                    className="hidden"
-                  />
+                        <option value="steel">
+                          강 (Steel)
+                        </option>
 
-                  <div className="mt-4 flex gap-3">
-                    <select
-                      value={
-                        material
-                      }
-                      onChange={(
-                        e
-                      ) =>
-                        setMaterial(
-                          e.target.value
-                        )
-                      }
-                      className="flex-1 h-11 px-3 rounded-lg border border-slate-300 bg-white text-sm outline-none focus:border-blue-500"
-                    >
-                      <option value="">
-                        재질 선택
-                      </option>
+                        <option value="stainless_steel">
+                          스테인리스강
+                        </option>
 
-                      <option value="steel">
-                        강 (Steel)
-                      </option>
+                        <option value="aluminum">
+                          알루미늄
+                        </option>
 
-                      <option value="stainless_steel">
-                        스테인리스강
-                      </option>
+                        <option value="titanium">
+                          티타늄
+                        </option>
 
-                      <option value="aluminum">
-                        알루미늄
-                      </option>
+                        <option value="cast_iron">
+                          주철
+                        </option>
 
-                      <option value="titanium">
-                        티타늄
-                      </option>
+                        <option value="copper">
+                          구리
+                        </option>
 
-                      <option value="cast_iron">
-                        주철
-                      </option>
+                        <option value="magnesium">
+                          마그네슘 합금
+                        </option>
 
-                      <option value="copper">
-                        구리
-                      </option>
+                        <option value="nickel_alloy">
+                          니켈 합금
+                        </option>
 
-                      <option value="magnesium">
-                        마그네슘 합금
-                      </option>
+                        <option value="tool_steel">
+                          공구강
+                        </option>
 
-                      <option value="nickel_alloy">
-                        니켈 합금
-                      </option>
+                        <option value="unknown">
+                          모름
+                        </option>
+                      </select>
 
-                      <option value="tool_steel">
-                        공구강
-                      </option>
-
-                      <option value="unknown">
-                        모름
-                      </option>
-                    </select>
-
-                    <button
-                      onClick={
-                        handleUpload
-                      }
-                      disabled={
-                        uploading
-                      }
-                      className="px-7 h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-50 transition"
-                    >
-                      {uploading
-                        ? "분석 중..."
-                        : "분석 시작"}
-                    </button>
+                      <button
+                        onClick={handleUpload}
+                        disabled={uploading}
+                        className="px-7 h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-50 transition"
+                      >
+                        {uploading
+                          ? "분석 중..."
+                          : "분석 시작"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                {/* Grad-CAM */}
-                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200">
-                  <div className="flex items-center justify-between mb-4">
+
+                {/* =========================
+                    Grad-CAM++
+                ========================== */}
+                <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
+
+                  {/* 제목 */}
+                  <div className="flex items-center justify-between">
                     <div>
                       <h3 className="font-bold text-base">
                         Grad-CAM++ 결과
                       </h3>
 
                       <p className="text-xs text-slate-400 mt-1">
-                        모델이 판단에
-                        활용한 영역
+                        모델이 판단에 활용한 영역
                       </p>
                     </div>
 
@@ -2178,74 +2214,73 @@ export default function App() {
                       )}
                   </div>
 
-                  {result &&
-                  (result.gradcam_masks ||
-                    result.gradcam_layers) ? (
-                    <GradcamView
-                      result={
-                        result
-                      }
-                      chipSize="text-[11px]"
-                      canvasClass="h-[300px]"
-                    />
-                  ) : (
-                    <div className="h-[300px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-slate-500">
-                          분석 전
-                        </p>
+                  {/* Grad-CAM 전체를 세로 중앙 배치 */}
+                  <div className="flex-1 flex flex-col justify-center py-5">
+                    {result &&
+                    (result.gradcam_masks ||
+                      result.gradcam_layers) ? (
+                      <GradcamView
+                        result={result}
+                        chipSize="text-[11px]"
+                        canvasClass="h-[350px]"
+                      />
+                    ) : (
+                      <div className="h-[350px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
+                        <div className="text-center">
+                          <p className="text-sm font-semibold text-slate-500">
+                            분석 전
+                          </p>
 
-                        <p className="text-xs text-slate-400 mt-2">
-                          분석을 실행하면
-                          시각화 결과가
-                          표시됩니다.
-                        </p>
+                          <p className="text-xs text-slate-400 mt-2">
+                            분석을 실행하면 시각화 결과가 표시됩니다.
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                {/* 결과 */}
-                <div className="p-5">
-                  <h3 className="font-bold text-base mb-4">
+
+                {/* =========================
+                    분석 결과
+                ========================== */}
+                <div className="p-5 flex flex-col">
+
+                  <h3 className="font-bold text-base">
                     분석 결과
                   </h3>
 
                   {result ? (
-                    <>
-                      <div className="rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 border border-blue-100 py-7 px-5 text-center">
+                    <div className="flex-1 flex flex-col pt-4">
+
+                      {/* 최종 예측 */}
+                      <div className="rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 border border-blue-100 py-5 px-5 text-center">
+
                         <p className="text-xs text-slate-500 uppercase tracking-[0.16em]">
-                          Predicted
-                          fracture
+                          Predicted fracture
                         </p>
 
-                        <p className="text-3xl font-black text-blue-700 mt-3">
-                          {result
-                            .display_prediction ||
-                            result
-                              .prediction}
+                        <p className="text-3xl font-black text-blue-700 mt-2">
+                          {result.display_prediction ||
+                            result.prediction}
                         </p>
 
-                        <p className="text-4xl font-black text-slate-900 mt-2">
-                          {
-                            result
-                              .confidence
-                          }
+                        <p className="text-4xl font-black text-slate-900 mt-1">
+                          {result.confidence}
                         </p>
 
                         <span
-                          className={`inline-block mt-4 px-3 py-1 rounded-full border text-xs font-bold ${confidenceStyle}`}
+                          className={`inline-block mt-3 px-3 py-1 rounded-full border text-xs font-bold ${confidenceStyle}`}
                         >
-                          신뢰도{" "}
-                          {
-                            confidenceLabel
-                          }
+                          신뢰도 {confidenceLabel}
                         </span>
                       </div>
+
 
                       {/* 전체 예측 확률 */}
                       {result.similarities && (
                         <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+
                           <div className="flex items-center justify-between mb-3">
                             <p className="text-xs font-bold text-slate-600">
                               전체 예측 확률
@@ -2257,79 +2292,99 @@ export default function App() {
                           </div>
 
                           <div className="space-y-3">
-                            {Object.entries(result.similarities)
+                            {Object.entries(
+                              result.similarities
+                            )
                               .sort(
                                 (a, b) =>
-                                  parseFloat(b[1]) - parseFloat(a[1])
+                                  parseFloat(b[1]) -
+                                  parseFloat(a[1])
                               )
-                              .map(([name, value]) => {
-                                const percent = Math.max(
-                                  0,
-                                  Math.min(
-                                    100,
-                                    parseFloat(value) || 0
-                                  )
-                                );
+                              .map(
+                                ([name, value]) => {
+                                  const percent =
+                                    Math.max(
+                                      0,
+                                      Math.min(
+                                        100,
+                                        parseFloat(
+                                          value
+                                        ) || 0
+                                      )
+                                    );
 
-                                const isPredicted =
-                                  name === result.display_prediction ||
-                                  EN_NAMES[name] === result.prediction;
+                                  const isPredicted =
+                                    name ===
+                                      (result.display_prediction ||
+                                        result.prediction) ||
+                                    EN_NAMES[
+                                      name
+                                    ] ===
+                                      result.prediction_en;
 
-                                return (
-                                  <div key={name}>
-                                    <div className="flex items-center justify-between gap-3 mb-1">
-                                      <span
-                                        className={`text-[11px] ${
-                                          isPredicted
-                                            ? "font-bold text-slate-900"
-                                            : "font-medium text-slate-500"
-                                        }`}
-                                      >
-                                        {name}
-                                      </span>
+                                  return (
+                                    <div key={name}>
 
-                                      <span
-                                        className={`text-[11px] tabular-nums ${
-                                          isPredicted
-                                            ? "font-bold text-blue-700"
-                                            : "font-semibold text-slate-500"
-                                        }`}
-                                      >
-                                        {typeof value === "number"
-                                          ? `${value.toFixed(1)}%`
-                                          : value}
-                                      </span>
+                                      <div className="flex items-center justify-between gap-3 mb-1">
+
+                                        <span
+                                          className={`text-[11px] ${
+                                            isPredicted
+                                              ? "font-bold text-slate-900"
+                                              : "font-medium text-slate-500"
+                                          }`}
+                                        >
+                                          {name}
+                                        </span>
+
+                                        <span
+                                          className={`text-[11px] tabular-nums ${
+                                            isPredicted
+                                              ? "font-bold text-blue-700"
+                                              : "font-semibold text-slate-500"
+                                          }`}
+                                        >
+                                          {typeof value ===
+                                          "number"
+                                            ? `${value.toFixed(
+                                                1
+                                              )}%`
+                                            : value}
+                                        </span>
+                                      </div>
+
+                                      {/* 확률 막대 */}
+                                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full transition-all duration-500 ${
+                                            isPredicted
+                                              ? "bg-blue-600"
+                                              : "bg-slate-300"
+                                          }`}
+                                          style={{
+                                            width: `${percent}%`,
+                                          }}
+                                        />
+                                      </div>
                                     </div>
-
-                                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                      <div
-                                        className={`h-full rounded-full transition-all duration-500 ${
-                                          isPredicted
-                                            ? "bg-blue-600"
-                                            : "bg-slate-300"
-                                        }`}
-                                        style={{
-                                          width: `${percent}%`,
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                                  );
+                                }
+                              )}
                           </div>
                         </div>
                       )}
 
+
+                      {/* 재질 / 상태 */}
                       <div className="mt-4 grid grid-cols-2 gap-3">
+
                         <div className="rounded-lg border border-slate-200 p-3">
                           <p className="text-[11px] text-slate-400">
                             재질
                           </p>
 
                           <p className="text-sm font-bold mt-1">
-                            {
-                              materialText
-                            }
+                            {materialText}
                           </p>
                         </div>
 
@@ -2339,50 +2394,51 @@ export default function App() {
                           </p>
 
                           <p className="text-sm font-bold mt-1">
-                            {
-                              confidenceLabel
-                            }
+                            {confidenceLabel}
                           </p>
                         </div>
                       </div>
 
+
+                      {/* 신뢰도 안내 */}
                       <div
                         className={`mt-3 rounded-lg border p-3 ${confidenceStyle}`}
                       >
                         <p className="text-xs leading-5">
-                          {
-                            result
-                              .confidence_message
-                          }
+                          {result.confidence_message}
                         </p>
                       </div>
-                    </>
+                    </div>
                   ) : (
-                    <div className="h-[300px] rounded-xl bg-slate-50 border border-dashed border-slate-300 flex items-center justify-center">
-                      <div className="text-center px-5">
-                        <p className="text-sm font-semibold text-slate-500">
-                          분석 결과 없음
-                        </p>
+                    <div className="flex-1 flex items-center justify-center">
+                      <div className="w-full h-[350px] rounded-xl bg-slate-50 border border-dashed border-slate-300 flex items-center justify-center">
+                        <div className="text-center px-5">
+                          <p className="text-sm font-semibold text-slate-500">
+                            분석 결과 없음
+                          </p>
 
-                        <p className="text-xs text-slate-400 mt-2">
-                          이미지를 선택하고
-                          분석을 시작하세요.
-                        </p>
+                          <p className="text-xs text-slate-400 mt-2">
+                            이미지를 선택하고 분석을 시작하세요.
+                          </p>
+                        </div>
                       </div>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* 기능 버튼 */}
-              <div className="border-t border-slate-200 p-5">
-                <div className="grid md:grid-cols-3 gap-3">
 
+              {/* =========================
+                  기능 버튼
+              ========================== */}
+              <div className="border-t border-slate-200 p-5">
+
+                <div className="grid md:grid-cols-2 gap-4">
+
+                  {/* AI 상세 분석 */}
                   <button
                     onClick={() => {
-                      if (
-                        !result
-                      ) {
+                      if (!result) {
                         alert(
                           "먼저 이미지를 분석해주세요."
                         );
@@ -2397,6 +2453,7 @@ export default function App() {
                     className="group rounded-xl bg-blue-600 hover:bg-blue-700 text-white p-4 text-left transition shadow-sm"
                   >
                     <div className="flex items-center gap-3">
+
                       <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
                         AI
                       </div>
@@ -2413,46 +2470,15 @@ export default function App() {
                     </div>
                   </button>
 
+
+                  {/* Phase */}
+                  
+
+
+                  {/* 유사 이미지 */}
                   <button
                     onClick={() => {
-                      if (
-                        !result
-                      ) {
-                        alert(
-                          "먼저 이미지를 분석해주세요."
-                        );
-
-                        return;
-                      }
-
-                      setShowPhaseModal(
-                        true
-                      );
-                    }}
-                    className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white p-4 text-left transition shadow-sm"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
-                        P
-                      </div>
-
-                      <div>
-                        <p className="font-bold">
-                          Phase 분석
-                        </p>
-
-                        <p className="text-xs text-emerald-100 mt-0.5">
-                          영역별 조직 분석
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (
-                        !result
-                      ) {
+                      if (!result) {
                         alert(
                           "먼저 이미지를 분석해주세요."
                         );
@@ -2467,6 +2493,7 @@ export default function App() {
                     className="rounded-xl bg-violet-600 hover:bg-violet-700 text-white p-4 text-left transition shadow-sm"
                   >
                     <div className="flex items-center gap-3">
+
                       <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold">
                         ≋
                       </div>
@@ -2496,6 +2523,221 @@ export default function App() {
                 왼쪽 분석 기록에서 두 결과를 선택해 실행할 수 있습니다.
               </p>
             </div>
+          
+              </>
+            ) : (
+              <>
+
+              {/* 제목 */}
+              <div className="mb-6 flex items-start justify-between gap-6">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-600 font-bold">
+                    Phase Analysis
+                  </p>
+
+                  <h2 className="text-2xl font-bold mt-1">
+                    Phase 이미지 분석
+                  </h2>
+
+                  <p className="text-sm text-slate-500 mt-2">
+                    현미경 조직 이미지에서 영역별 Phase를 분류하고 분포를 확인합니다.
+                  </p>
+                </div>
+
+                <div className="hidden xl:block max-w-[430px] rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                  <p className="text-xs font-semibold text-emerald-800 leading-5">
+                    Phase 분석은 별도의 현미경 조직 이미지를 사용합니다.
+                  </p>
+
+                  <p className="text-xs text-slate-500 mt-1 leading-5">
+                    파단면 이미지와 Phase 분석용 조직 이미지는 서로 다른 입력입니다.
+                  </p>
+                </div>
+              </div>
+
+              {/* Phase 메인 카드 */}
+              <section className="bg-white rounded-[22px] border border-slate-200 shadow-sm overflow-hidden">
+                <div className="grid xl:grid-cols-[1fr_1fr_0.82fr] min-h-[560px]">
+
+                  {/* Phase 입력 이미지 */}
+                  <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-base">
+                          입력 이미지
+                        </h3>
+
+                        <p className="text-xs text-slate-400 mt-1">
+                          Phase 분석용 현미경 조직 이미지
+                        </p>
+                      </div>
+
+                      {phasePreviewUrl && (
+                        <button
+                          onClick={() =>
+                            phaseFileRef.current?.click()
+                          }
+                          className="text-xs text-emerald-600 font-semibold hover:text-emerald-800"
+                        >
+                          이미지 변경
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex-1 flex flex-col justify-center py-5">
+                      <label
+                        htmlFor="phase-file-input"
+                        className="h-[350px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-pointer"
+                      >
+                        {phasePreviewUrl ? (
+                          <img
+                            src={phasePreviewUrl}
+                            alt="Phase 입력 이미지"
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="text-center px-6">
+                            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center text-xl mb-3">
+                              +
+                            </div>
+
+                            <p className="font-semibold text-slate-700">
+                              현미경 조직 이미지를 업로드하세요
+                            </p>
+
+                            <p className="text-xs text-slate-400 mt-2">
+                              클릭하여 Phase 분석용 이미지 선택
+                            </p>
+                          </div>
+                        )}
+                      </label>
+
+                      <input
+                        id="phase-file-input"
+                        type="file"
+                        accept="image/*"
+                        ref={phaseFileRef}
+                        onChange={handlePhaseFileChange}
+                        className="hidden"
+                      />
+
+                      <button
+                        onClick={() =>
+                          alert(
+                            "Phase segmentation 모델과 API를 연결한 후 분석 기능을 활성화할 예정입니다."
+                          )
+                        }
+                        disabled={!phasePreviewUrl}
+                        className="mt-4 w-full h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        Phase 분석 시작
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Segmentation 결과 */}
+                  <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
+                    <div>
+                      <h3 className="font-bold text-base">
+                        Phase Segmentation 결과
+                      </h3>
+
+                      <p className="text-xs text-slate-400 mt-1">
+                        AI가 분류한 영역별 Phase 시각화
+                      </p>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center py-5">
+                      <div className="w-full h-[350px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
+                        <div className="text-center px-6">
+                          <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center font-bold text-xl">
+                            P
+                          </div>
+
+                          <p className="text-sm font-semibold text-slate-600 mt-4">
+                            Segmentation 결과 없음
+                          </p>
+
+                          <p className="text-xs text-slate-400 mt-2 leading-5">
+                            Phase 모델 연결 후 영역별 분류 이미지가 표시됩니다.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Phase 분석 결과 */}
+                  <div className="p-5 flex flex-col">
+                    <div>
+                      <h3 className="font-bold text-base">
+                        Phase 분석 결과
+                      </h3>
+
+                      <p className="text-xs text-slate-400 mt-1">
+                        Phase별 면적 구성 비율
+                      </p>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center py-5">
+                      <div className="w-full">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+                          <p className="text-xs font-bold text-slate-600">
+                            Phase 구성 비율
+                          </p>
+
+                          <div className="mt-5 space-y-5">
+                            {[
+                              "Primary Si",
+                              "Eutectic Si",
+                              "Al₃Ni",
+                              "Al",
+                            ].map((name) => (
+                              <div key={name}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-xs font-medium text-slate-500">
+                                    {name}
+                                  </span>
+
+                                  <span className="text-xs text-slate-400">
+                                    -
+                                  </span>
+                                </div>
+
+                                <div className="h-2 rounded-full bg-slate-200" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                          <div className="flex gap-3">
+                            <div className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                              i
+                            </div>
+
+                            <p className="text-xs text-emerald-700 leading-5">
+                              모델 연결 후 segmentation 결과를 기준으로 각 Phase의 면적 비율이 표시됩니다.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div className="mt-5 flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">
+                <div className="w-2 h-2 rounded-full bg-emerald-600 mt-2 shrink-0" />
+
+                <p className="text-sm text-slate-500 leading-6">
+                  Phase 분석은 파단면 분석과 별도의 입력 이미지와 모델을 사용합니다.
+                  현재는 화면 구성을 먼저 적용했으며, Phase segmentation 모델과 API를 연결하면
+                  영역별 분류 결과와 Phase별 구성 비율을 실제 값으로 표시할 수 있습니다.
+                </p>
+              </div>
+
+              </>
+            )}
           </div>
         </main>
       </div>
@@ -2587,91 +2829,6 @@ export default function App() {
                 원인을 확정하는 정보가
                 아닙니다.
               </p>
-            </div>
-          </ModalShell>
-        )}
-
-      {/* Phase 분석 */}
-      {showPhaseModal &&
-        result && (
-          <ModalShell
-            title="Phase 분석"
-            subtitle="현미경 이미지 영역별 Phase 분류"
-            onClose={() =>
-              setShowPhaseModal(
-                false
-              )
-            }
-            maxWidth="max-w-4xl"
-          >
-            <div className="grid md:grid-cols-2 gap-6">
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 min-h-[350px] flex items-center justify-center">
-                <div className="text-center px-8">
-                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center text-2xl font-bold">
-                    P
-                  </div>
-
-                  <p className="font-bold text-lg mt-5">
-                    Phase segmentation
-                  </p>
-
-                  <p className="text-sm text-slate-500 mt-2 leading-6">
-                    Phase 모델을 연결하면
-                    이 영역에 segmentation
-                    결과 이미지가 표시됩니다.
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-                  <p className="text-sm font-bold text-emerald-800">
-                    Phase 분석 기능 준비 중
-                  </p>
-
-                  <p className="text-sm text-emerald-700 leading-6 mt-2">
-                    현재는 프론트엔드
-                    인터페이스만 구성되어
-                    있습니다. 향후 Phase
-                    segmentation 모델 및 API
-                    연결 후 영역별 분류 결과와
-                    비율을 표시할 예정입니다.
-                  </p>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  <div className="rounded-xl border p-4">
-                    <p className="text-xs text-slate-400">
-                      제공 예정
-                    </p>
-
-                    <p className="font-semibold mt-1">
-                      Phase 영역 시각화
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border p-4">
-                    <p className="text-xs text-slate-400">
-                      제공 예정
-                    </p>
-
-                    <p className="font-semibold mt-1">
-                      Phase별 면적 비율
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border p-4">
-                    <p className="text-xs text-slate-400">
-                      제공 예정
-                    </p>
-
-                    <p className="font-semibold mt-1">
-                      조직 분포 분석
-                    </p>
-                  </div>
-                </div>
-              </div>
             </div>
           </ModalShell>
         )}
