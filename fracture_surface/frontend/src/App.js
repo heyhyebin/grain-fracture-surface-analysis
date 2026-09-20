@@ -5,6 +5,7 @@ import {
   useMemo,
   useCallback,
 } from "react";
+import { addHistoryItem, fetchHistory, clearAllHistory } from "./firebase";
 
 const CLASS_COLORS = {
   Cleavage: "#2563EB",
@@ -1165,30 +1166,16 @@ export default function App() {
   };
 
   useEffect(() => {
+  const loadHistory = async () => {
     try {
-      const saved =
-        localStorage.getItem(
-          "analysisHistory"
-        );
-
-      if (saved) {
-        setHistory(
-          JSON.parse(
-            saved
-          )
-        );
-      }
+      const items = await fetchHistory();
+      setHistory(items);
     } catch (err) {
-      console.error(
-        "기록 불러오기 실패:",
-        err
-      );
-
-      localStorage.removeItem(
-        "analysisHistory"
-      );
+      console.error("Firestore 기록 불러오기 실패:", err);
     }
-  }, []);
+  };
+  loadHistory();
+}, []);
 
   const materialText =
     MATERIAL_LABELS[
@@ -1403,90 +1390,31 @@ export default function App() {
       }
     };
 
-  const saveHistory = (
-    data,
-    thumbnail
-  ) => {
-    const hasNewMasks =
-      !!data.gradcam_masks;
-
-    const historyResult =
-      {
-        ...data,
-
-        gradcam_image:
-          null,
-
-        gradcam_layers:
-          hasNewMasks
-            ? null
-            : data.gradcam_layers,
-      };
-
-    const newItem = {
-      id: Date.now(),
-
-      time:
-        new Date().toLocaleString(),
-
-      image:
-        thumbnail,
-
-      result:
-        historyResult,
-    };
-
-    const updatedHistory =
-      [
-        newItem,
-        ...history,
-      ].slice(
-        0,
-        10
-      );
-
-    setHistory(
-      updatedHistory
-    );
-
-    try {
-      localStorage.setItem(
-        "analysisHistory",
-        JSON.stringify(
-          updatedHistory
-        )
-      );
-    } catch (err) {
-      console.error(
-        "기록 저장 실패:",
-        err
-      );
-
-      const lighterHistory =
-        [
-          newItem,
-          ...history,
-        ].slice(
-          0,
-          5
-        );
-
-      setHistory(
-        lighterHistory
-      );
-
-      localStorage.setItem(
-        "analysisHistory",
-        JSON.stringify(
-          lighterHistory
-        )
-      );
-
-      alert(
-        "이미지 용량이 커서 최근 5개 기록만 저장했습니다."
-      );
-    }
+  const saveHistory = async (data, thumbnail) => {
+  const hasNewMasks = !!data.gradcam_masks;
+  const historyResult = {
+    ...data,
+    gradcam_image: null,
+    gradcam_masks: null,      // Firestore 1MB 제한 고려, 마스크도 제외
+    gradcam_layers: null,
   };
+
+  const newItem = {
+    id: Date.now(),
+    time: new Date().toLocaleString(),
+    image: thumbnail,
+    result: historyResult,
+  };
+
+  try {
+    await addHistoryItem(newItem);
+    const items = await fetchHistory();
+    setHistory(items);
+  } catch (err) {
+    console.error("Firestore 기록 저장 실패:", err);
+    alert("기록 저장 중 오류가 발생했습니다. 콘솔을 확인해주세요.");
+  }
+};
 
   const handleHistoryClick =
     (item) => {
@@ -1556,26 +1484,17 @@ export default function App() {
       );
     };
 
-  const clearHistory =
-    () => {
-      setHistory([]);
-
-      setSelectedCompareIds(
-        []
-      );
-
-      setShowCompareModal(
-        false
-      );
-
-      setCompareSummary(
-        null
-      );
-
-      localStorage.removeItem(
-        "analysisHistory"
-      );
-    };
+const clearHistory = async () => {
+  try {
+    await clearAllHistory();
+  } catch (err) {
+    console.error("Firestore 기록 삭제 실패:", err);
+  }
+  setHistory([]);
+  setSelectedCompareIds([]);
+  setShowCompareModal(false);
+  setCompareSummary(null);
+};
 
   const handleUpload =
     async () => {
