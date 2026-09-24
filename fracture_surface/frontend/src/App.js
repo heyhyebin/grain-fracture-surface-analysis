@@ -379,7 +379,7 @@ function GradcamView({
   const layerImgsRef =
     useRef({});
 
-  const hasMasks =
+    const hasMasks =
     !!result.gradcam_masks;
 
   const hasLayers =
@@ -923,7 +923,7 @@ function GradcamView({
   }, [
     result.base_image,
     hasMasks,
-    hasContoursOnly,
+    hasContoursOnly,  
     allClasses,
     sourceObj,
     redraw,
@@ -1148,20 +1148,169 @@ export default function App() {
 
   const [phasePreviewUrl, setPhasePreviewUrl] = useState(null);
 
-  const handlePhaseFileChange = async (e) => {
-    const file = e.target.files[0];
+  // ==========================================
+  // Phase 분석 상태
+  // ==========================================
+
+  // 업로드한 원본 이미지 파일
+  const [phaseFile, setPhaseFile] = useState(null);
+
+  // Phase 분석 결과
+  const [phaseResult, setPhaseResult] = useState(null);
+
+  // Phase 분석 진행 상태
+  const [phaseLoading, setPhaseLoading] = useState(false);
+
+  // Phase 분석 오류 메시지
+  const [phaseError, setPhaseError] = useState("");
+
+// ==========================================
+// Phase 이미지 업로드
+// ==========================================
+
+const handlePhaseFileChange = async (e) => {
+
+  const file = e.target.files?.[0];
 
     if (!file) {
       return;
     }
 
-    try {
-      const base64 = await fileToBase64(file);
-      setPhasePreviewUrl(base64);
-    } catch (err) {
-      console.error("Phase 이미지 처리 실패:", err);
-      alert("이미지를 불러오는 중 오류가 발생했습니다.");
+    // 이미지 파일인지 확인
+    if (!file.type.startsWith("image/")) {
+
+      alert("이미지 파일만 업로드할 수 있습니다.");
+
+      return;
+
     }
+
+    try {
+
+      // 이미지 미리보기 생성
+      const base64 = await fileToBase64(file);
+
+      // 실제 이미지 파일 저장
+      setPhaseFile(file);
+
+      // 이미지 미리보기 저장
+      setPhasePreviewUrl(base64);
+
+      // 이전 분석 결과 초기화
+      setPhaseResult(null);
+
+      // 이전 오류 초기화
+      setPhaseError("");
+
+    } catch (err) {
+
+      console.error(
+        "Phase 이미지 처리 실패:",
+        err
+      );
+
+      alert(
+        "이미지를 불러오는 중 오류가 발생했습니다."
+      );
+
+    }
+
+  };
+
+  // ==========================================
+  // Phase 분석 실행
+  // ==========================================
+
+  const handlePhaseAnalyze = async () => {
+
+    // 이미지가 없는 경우
+    if (!phaseFile) {
+
+      alert("Phase 분석용 이미지를 업로드해 주세요.");
+
+      return;
+
+    }
+
+    // 중복 실행 방지
+    if (phaseLoading) {
+      return;
+    }
+
+    try {
+
+      setPhaseLoading(true);
+
+      setPhaseError("");
+
+      setPhaseResult(null);
+
+      // 서버로 전달할 데이터
+      const formData = new FormData();
+
+      formData.append(
+        "file",
+        phaseFile
+      );
+
+      // Phase 분석 API 호출
+      const response = await fetch(
+        "http://localhost:8000/analyze-phase",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      // HTTP 오류 처리
+      if (!response.ok) {
+
+        throw new Error(
+          `Phase 분석 API 오류: ${response.status}`
+        );
+
+      }
+
+      // 분석 결과 수신
+      const data = await response.json();
+
+      // 모델 미연결 상태 처리
+      if (data.status === "model_not_ready") {
+
+        setPhaseError(
+          data.message ||
+          "Phase 모델이 아직 연결되지 않았습니다."
+        );
+
+        return;
+
+      }
+
+      // 분석 결과 저장
+      setPhaseResult(data);
+
+      console.log(
+        "Phase 분석 성공:",
+        data
+      );
+
+    } catch (err) {
+
+      console.error(
+        "Phase 분석 실패:",
+        err
+      );
+
+      setPhaseError(
+        "Phase 분석 중 오류가 발생했습니다. 서버 연결 상태를 확인해 주세요."
+      );
+
+    } finally {
+
+      setPhaseLoading(false);
+
+    }
+
   };
 
   useEffect(() => {
@@ -1560,7 +1709,7 @@ const clearHistory = async () => {
           data
         );
 
-        saveHistory(
+        await saveHistory(
           data,
           thumbnailBase64
         );
@@ -2118,9 +2267,9 @@ const clearHistory = async () => {
 
                     {result &&
                       (result.gradcam_masks ||
-  result.gradcam_layers ||
-  (result.gradcam_contours &&
-    Object.keys(result.gradcam_contours).length > 0)) && (
+    result.gradcam_layers ||
+    (result.gradcam_contours &&
+      Object.keys(result.gradcam_contours).length > 0)) && (
                         <button
                           onClick={() =>
                             setShowGradcamModal(
@@ -2544,21 +2693,23 @@ const clearHistory = async () => {
                       />
 
                       <button
-                        onClick={() =>
-                          alert(
-                            "Phase segmentation 모델과 API를 연결한 후 분석 기능을 활성화할 예정입니다."
-                          )
-                        }
-                        disabled={!phasePreviewUrl}
+                        onClick={handlePhaseAnalyze}
+                        disabled={!phaseFile || phaseLoading}
                         className="mt-4 w-full h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
                       >
-                        Phase 분석 시작
+                        {phaseLoading
+                          ? "Phase 분석 중..."
+                          : "Phase 분석 시작"}
                       </button>
                     </div>
                   </div>
 
-                  {/* Segmentation 결과 */}
+                  {/* ==========================================
+                      Phase Segmentation 결과
+                  ========================================== */}
+
                   <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
+
                     <div>
                       <h3 className="font-bold text-base">
                         Phase Segmentation 결과
@@ -2569,23 +2720,68 @@ const clearHistory = async () => {
                       </p>
                     </div>
 
-                    <div className="flex-1 flex items-center justify-center py-5">
-                      <div className="w-full h-[350px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
-                        <div className="text-center px-6">
-                          <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center font-bold text-xl">
-                            P
+                    <div className="flex-1 flex flex-col justify-center py-5">
+
+                      <div className="w-full h-[350px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+
+                        {phaseLoading ? (
+
+                          <div className="text-center">
+
+                            <div className="w-9 h-9 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+
+                            <p className="text-sm text-slate-500">
+                              Phase 분석 중...
+                            </p>
+
                           </div>
 
-                          <p className="text-sm font-semibold text-slate-600 mt-4">
-                            Segmentation 결과 없음
+                        ) : phaseResult?.overlay_image ? (
+
+                          <img
+                            src={phaseResult.overlay_image}
+                            alt="Phase Segmentation 결과"
+                            className="w-full h-full object-contain"
+                          />
+
+                        ) : (
+
+                          <div className="text-center px-6">
+
+                            <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center font-bold text-xl">
+                              P
+                            </div>
+
+                            <p className="text-sm font-semibold text-slate-600 mt-4">
+                              Segmentation 결과 없음
+                            </p>
+
+                            <p className="text-xs text-slate-400 mt-2 leading-5">
+                              Phase 이미지를 업로드하고 분석을 시작하세요.
+                            </p>
+
+                          </div>
+
+                        )}
+
+                      </div>
+
+                      {/* 분석 오류 */}
+
+                      {phaseError && (
+
+                        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+
+                          <p className="text-xs text-red-600">
+                            {phaseError}
                           </p>
 
-                          <p className="text-xs text-slate-400 mt-2 leading-5">
-                            Phase 모델 연결 후 영역별 분류 이미지가 표시됩니다.
-                          </p>
                         </div>
-                      </div>
+
+                      )}
+
                     </div>
+
                   </div>
 
                   {/* Phase 분석 결과 */}
@@ -2609,25 +2805,66 @@ const clearHistory = async () => {
 
                           <div className="mt-5 space-y-5">
                             {[
-                              "Primary Si",
-                              "Eutectic Si",
-                              "Al₃Ni",
-                              "Al",
-                            ].map((name) => (
-                              <div key={name}>
-                                <div className="flex items-center justify-between mb-2">
-                                  <span className="text-xs font-medium text-slate-500">
-                                    {name}
-                                  </span>
+                              {
+                                label: "Primary Si",
+                                key: "Primary Si",
+                              },
+                              {
+                                label: "Eutectic Si",
+                                key: "Eutectic Si",
+                              },
+                              {
+                                label: "Al₃Ni",
+                                key: "Al3Ni",
+                              },
+                              {
+                                label: "Al",
+                                key: "Al Matrix",
+                              },
+                            ].map((phase) => {
 
-                                  <span className="text-xs text-slate-400">
-                                    -
-                                  </span>
+                              const value =
+                                phaseResult?.phase_distribution?.[phase.key];
+
+                              return (
+
+                                <div key={phase.key}>
+
+                                  <div className="flex items-center justify-between mb-2">
+
+                                    <span className="text-xs font-medium text-slate-500">
+                                      {phase.label}
+                                    </span>
+
+                                    <span className="text-xs font-semibold text-slate-700">
+                                      {typeof value === "number"
+                                        ? `${value.toFixed(1)}%`
+                                        : "-"}
+                                    </span>
+
+                                  </div>
+
+                                  <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+
+                                    <div
+                                      className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                                      style={{
+                                        width: `${
+                                          typeof value === "number"
+                                            ? Math.min(100, Math.max(0, value))
+                                            : 0
+                                        }%`
+                                      }}
+                                    />
+
+                                  </div>
+
                                 </div>
 
-                                <div className="h-2 rounded-full bg-slate-200" />
-                              </div>
-                            ))}
+                              );
+
+                            })}
+
                           </div>
                         </div>
 
@@ -2653,8 +2890,9 @@ const clearHistory = async () => {
 
                 <p className="text-sm text-slate-500 leading-6">
                   Phase 분석은 파단면 분석과 별도의 입력 이미지와 모델을 사용합니다.
-                  현재는 화면 구성을 먼저 적용했으며, Phase segmentation 모델과 API를 연결하면
-                  영역별 분류 결과와 Phase별 구성 비율을 실제 값으로 표시할 수 있습니다.
+                  분석 결과에는 영역별 Phase 분류 이미지와 각 Phase의 면적 비율이 표시됩니다.
+                  면적 비율은 이미지에서 각 Phase가 차지하는 픽셀 비율이며,
+                  모델의 예측 신뢰도와는 다른 값입니다.
                 </p>
               </div>
 
