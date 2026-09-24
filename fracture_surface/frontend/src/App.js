@@ -351,6 +351,17 @@ function drawPolylines(
   ctx.restore();
 }
 
+// 좌표 JSON(gradcam_contours)을 캔버스에 그릴 수 있는 폴리라인으로 변환
+function contoursToPolylines(contoursForClass) {
+  return contoursForClass.map((c) => {
+    const poly = c.pts.map(([x, y]) => ({ x, y }));
+    if (poly.length > 1) {
+      poly.push(poly[0]); // 닫힌 도형으로 만들기
+    }
+    return { poly, overlaps: c.overlaps_with || [] };
+  });
+}
+
 function GradcamView({
   result,
   chipSize = "text-xs",
@@ -371,16 +382,26 @@ function GradcamView({
   const hasMasks =
     !!result.gradcam_masks;
 
+  const hasLayers =
+    !hasMasks && !!result.gradcam_layers;
+
+  const hasContoursOnly =
+    !hasMasks &&
+    !hasLayers &&
+    !!result.gradcam_contours &&
+    Object.keys(result.gradcam_contours).length > 0;
+
   const sourceObj =
     useMemo(() => {
-      return hasMasks
-        ? result.gradcam_masks
-        : result.gradcam_layers ||
-            {};
+      if (hasMasks) return result.gradcam_masks;
+      if (hasLayers) return result.gradcam_layers;
+      return result.gradcam_contours || {};
     }, [
       hasMasks,
+      hasLayers,
       result.gradcam_masks,
       result.gradcam_layers,
+      result.gradcam_contours,
     ]);
 
   const allClasses =
@@ -772,27 +793,50 @@ function GradcamView({
             0
           );
         }
+      } else if (hasContoursOnly) {
+        for (
+          const name of
+          allClasses
+        ) {
+          if (!checked[name]) continue;
+
+          const contoursForClass =
+            result.gradcam_contours?.[name] || [];
+
+          if (contoursForClass.length === 0) continue;
+
+          const items = contoursToPolylines(contoursForClass);
+
+          const solo = items
+            .filter((it) => it.overlaps.length === 0)
+            .map((it) => it.poly);
+
+          const overlap = items
+            .filter((it) => it.overlaps.length > 0)
+            .map((it) => it.poly);
+
+          if (solo.length > 0) {
+            drawPolylines(ctx, solo, CLASS_COLORS[name], {
+              lineWidth: 3,
+            });
+          }
+
+          if (overlap.length > 0) {
+            drawPolylines(ctx, overlap, CLASS_COLORS[name], {
+              dashed: true,
+              lineWidth: 4.5,
+            });
+          }
+        }
       } else {
         for (
           const name of
           allClasses
         ) {
-          if (
-            !checked[name]
-          ) {
-            continue;
-          }
-
-          const layerImg =
-            layerImgsRef
-              .current[name];
-
+          if (!checked[name]) continue;
+          const layerImg = layerImgsRef.current[name];
           if (layerImg) {
-            ctx.drawImage(
-              layerImg,
-              0,
-              0
-            );
+            ctx.drawImage(layerImg, 0, 0);
           }
         }
       }
@@ -800,6 +844,8 @@ function GradcamView({
       allClasses,
       checked,
       hasMasks,
+      hasContoursOnly,
+      result.gradcam_contours,
     ]);
 
   useEffect(() => {
@@ -846,71 +892,23 @@ function GradcamView({
           base.naturalHeight;
 
         if (hasMasks) {
-          masksRef.current =
-            {};
-
-          for (
-            const name of
-            allClasses
-          ) {
-            const src =
-              sourceObj[
-                name
-              ];
-
-            if (!src) {
-              continue;
-            }
-
-            const img =
-              await loadImage(
-                src
-              );
-
-            if (
-              cancelled
-            ) {
-              return;
-            }
-
-            masksRef.current[
-              name
-            ] =
-              decodeMaskFromImage(
-                img,
-                W,
-                H
-              );
+          masksRef.current = {};
+          for (const name of allClasses) {
+            const src = sourceObj[name];
+            if (!src) continue;
+            const img = await loadImage(src);
+            if (cancelled) return;
+            masksRef.current[name] = decodeMaskFromImage(img, W, H);
           }
+        } else if (hasContoursOnly) {
+          // 좌표 데이터는 이미 result 안에 있어 별도 이미지 로딩이 필요 없음
         } else {
-          layerImgsRef.current =
-            {};
-
-          for (
-            const name of
-            allClasses
-          ) {
-            const src =
-              sourceObj[
-                name
-              ];
-
-            if (!src) {
-              continue;
-            }
-
-            layerImgsRef.current[
-              name
-            ] =
-              await loadImage(
-                src
-              );
-
-            if (
-              cancelled
-            ) {
-              return;
-            }
+          layerImgsRef.current = {};
+          for (const name of allClasses) {
+            const src = sourceObj[name];
+            if (!src) continue;
+            layerImgsRef.current[name] = await loadImage(src);
+            if (cancelled) return;
           }
         }
 
@@ -925,6 +923,7 @@ function GradcamView({
   }, [
     result.base_image,
     hasMasks,
+    hasContoursOnly,
     allClasses,
     sourceObj,
     redraw,
@@ -2119,7 +2118,9 @@ const clearHistory = async () => {
 
                     {result &&
                       (result.gradcam_masks ||
-                        result.gradcam_layers) && (
+  result.gradcam_layers ||
+  (result.gradcam_contours &&
+    Object.keys(result.gradcam_contours).length > 0)) && (
                         <button
                           onClick={() =>
                             setShowGradcamModal(
@@ -2137,7 +2138,9 @@ const clearHistory = async () => {
                   <div className="flex-1 flex flex-col justify-center py-5">
                     {result &&
                     (result.gradcam_masks ||
-                      result.gradcam_layers) ? (
+  result.gradcam_layers ||
+  (result.gradcam_contours &&
+    Object.keys(result.gradcam_contours).length > 0)) ? (
                       <GradcamView
                         result={result}
                         chipSize="text-[11px]"
