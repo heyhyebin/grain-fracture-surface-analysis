@@ -5,7 +5,16 @@ import {
   useMemo,
   useCallback,
 } from "react";
+
 import { addHistoryItem, fetchHistory, clearAllHistory } from "./firebase";
+
+import {
+  buildPhaseHistoryItem,
+  addPhaseHistoryItem,
+  fetchPhaseHistory,
+  renamePhaseHistoryItem,
+  clearAllPhaseHistory,
+} from "./firebasePhase";
 
 const CLASS_COLORS = {
   Cleavage: "#2563EB",
@@ -1277,17 +1286,27 @@ const handlePhaseFileChange = async (e) => {
       // 분석 결과 수신
       const data = await response.json();
 
-      // 모델 미연결 상태 처리
-      if (data.status === "model_not_ready") {
+if (data.status !== "success") {
+  setPhaseError(data.message || "Phase 분석에 실패했습니다.");
+  return;
+}
 
-        setPhaseError(
-          data.message ||
-          "Phase 모델이 아직 연결되지 않았습니다."
-        );
+setPhaseResult(data);
 
-        return;
-
-      }
+// 저장용 가벼운 기록 생성 후 Firestore 저장
+try {
+  const item = await buildPhaseHistoryItem({
+    title: `Phase 분석 ${phaseHistory.length + 1}`,
+    originalDataUrl: phasePreviewUrl,
+    data,
+  });
+  await addPhaseHistoryItem(item);
+  setPhaseHistory(await fetchPhaseHistory());
+} catch (err) {
+  console.error("Phase 기록 저장 실패:", err);
+  // 분석 결과는 이미 화면에 표시됐으므로 저장 실패만 알림
+  alert("분석은 완료됐지만 기록 저장에 실패했습니다.");
+}
 
       // 분석 결과 저장
       setPhaseResult(data);
@@ -1340,51 +1359,32 @@ const handlePhaseFileChange = async (e) => {
   // ==========================================
 
   const handlePhaseHistoryClick = (item) => {
-    if (!item) {
-      return;
-    }
-
-    // 해당 기록의 원본 이미지 복원
-    setPhasePreviewUrl(item.image);
-
-    // 해당 기록의 분석 결과 복원
-    setPhaseResult(item.result);
-
-    // 이전 오류 제거
-    setPhaseError("");
-  };  
+  if (!item) return;
+  setPhasePreviewUrl(item.image);   // 썸네일(저해상도)
+  setPhaseResult(item.result);
+  setPhaseFile(null);               // 이전 파일이 재분석되는 문제 방지
+  setPhaseError("");
+};
 
   // ==========================================
   // Phase 기록 제목 변경
   // ==========================================
+const handlePhaseHistoryRename = async (id, currentTitle) => {
+  const newTitle = window.prompt("새로운 제목을 입력하세요.", currentTitle);
+  if (newTitle === null) return;
+  const trimmed = newTitle.trim();
+  if (!trimmed) return;
 
-  const handlePhaseHistoryRename = (id, currentTitle) => {
-    const newTitle = window.prompt(
-      "새로운 제목을 입력하세요.",
-      currentTitle
-    );
-
-    if (newTitle === null) {
-      return;
-    }
-
-    const trimmedTitle = newTitle.trim();
-
-    if (!trimmedTitle) {
-      return;
-    }
-
-    setPhaseHistory((prev) =>
-      prev.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              title: trimmedTitle,
-            }
-          : item
-      )
-    );
-  };
+  const target = phaseHistory.find((i) => i.id === id);
+  setPhaseHistory((prev) =>
+    prev.map((i) => (i.id === id ? { ...i, title: trimmed } : i))
+  );
+  try {
+    if (target?.docId) await renamePhaseHistoryItem(target.docId, trimmed);
+  } catch (err) {
+    console.error("제목 변경 실패:", err);
+  }
+};
 
   useEffect(() => {
   const loadHistory = async () => {
@@ -1396,6 +1396,17 @@ const handlePhaseFileChange = async (e) => {
     }
   };
   loadHistory();
+}, []);
+
+useEffect(() => {
+  const loadPhaseHistory = async () => {
+    try {
+      setPhaseHistory(await fetchPhaseHistory());
+    } catch (err) {
+      console.error("Phase 기록 불러오기 실패:", err);
+    }
+  };
+  loadPhaseHistory();
 }, []);
 
   const materialText =
@@ -2088,11 +2099,14 @@ const clearHistory = async () => {
 
                 {phaseHistory.length > 0 && (
                   <button
-                    onClick={() => setPhaseHistory([])}
-                    className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
-                  >
-                    전체 삭제
-                  </button>
+  onClick={async () => {
+    try { await clearAllPhaseHistory(); } catch (e) { console.error(e); }
+    setPhaseHistory([]);
+  }}
+  className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+>
+  전체 삭제
+</button>
                 )}
               </div>
 
