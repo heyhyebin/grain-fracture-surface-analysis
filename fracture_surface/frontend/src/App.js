@@ -1296,12 +1296,13 @@ const handlePhaseFileChange = async (e) => {
       const newPhaseHistory = {
         id: Date.now(),
 
+        // 자동 제목
+        title: `Phase 분석 ${phaseHistory.length + 1}`,
+
         time: new Date().toLocaleString("ko-KR"),
 
-        // 원본 이미지 미리보기
         image: phasePreviewUrl,
 
-        // 분석 결과 전체
         result: data,
       };
 
@@ -1352,6 +1353,38 @@ const handlePhaseFileChange = async (e) => {
     // 이전 오류 제거
     setPhaseError("");
   };  
+
+  // ==========================================
+  // Phase 기록 제목 변경
+  // ==========================================
+
+  const handlePhaseHistoryRename = (id, currentTitle) => {
+    const newTitle = window.prompt(
+      "새로운 제목을 입력하세요.",
+      currentTitle
+    );
+
+    if (newTitle === null) {
+      return;
+    }
+
+    const trimmedTitle = newTitle.trim();
+
+    if (!trimmedTitle) {
+      return;
+    }
+
+    setPhaseHistory((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              title: trimmedTitle,
+            }
+          : item
+      )
+    );
+  };
 
   useEffect(() => {
   const loadHistory = async () => {
@@ -2088,14 +2121,6 @@ const clearHistory = async () => {
                 {/* Phase 분석 기록 */}
                 {phaseHistory.map((item) => {
 
-                const distribution =
-                  item.result?.phase_distribution || {};
-
-                // 비율이 높은 Phase 순으로 정렬 후 Top 2
-                const topPhases = Object.entries(distribution)
-                  .sort(([, a], [, b]) => Number(b) - Number(a))
-                  .slice(0, 2);
-
                 return (
                     <div
                       key={item.id}
@@ -2127,24 +2152,30 @@ const clearHistory = async () => {
                         {/* 분석 정보 */}
                         <div className="min-w-0 flex-1">
 
-                          <p className="text-sm font-bold text-slate-700">
-                            Phase 분석
-                          </p>
+                          <div className="flex items-start justify-between gap-2">
 
-                          <div className="mt-1">
-                            {topPhases.map(([phase, percentage]) => (
-                              <p
-                                key={phase}
-                                className="text-sm text-slate-500 leading-5"
-                              >
-                                {phase}{" "}
-                                <span className="font-bold text-emerald-600">
-                                  {Number(percentage).toFixed(1)}%
-                                </span>
-                              </p>
-                            ))}
+                            <p className="text-sm font-bold text-slate-700 truncate">
+                              {item.title || "Phase 분석"}
+                            </p>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+
+                                handlePhaseHistoryRename(
+                                  item.id,
+                                  item.title || "Phase 분석"
+                                );
+                              }}
+                              className="shrink-0 text-xs text-slate-400 hover:text-emerald-600 transition"
+                              title="제목 변경"
+                            >
+                              수정
+                            </button>
+
                           </div>
-
+                          
                           <p className="text-[11px] text-slate-400 mt-1">
                             {item.time}
                           </p>
