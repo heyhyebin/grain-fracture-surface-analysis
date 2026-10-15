@@ -2531,7 +2531,7 @@ const clearHistory = async () => {
                             </p>
 
                             <p className="text-[10px] text-slate-400">
-                              Softmax
+                              예측 확률
                             </p>
                           </div>
 
