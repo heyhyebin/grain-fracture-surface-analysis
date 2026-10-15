@@ -27,3 +27,6 @@ yarn-error.log*
 __pycache__
 *.pyc
 node_modules/
+
+*/similar_db/*
+*/similar_cache.pt
