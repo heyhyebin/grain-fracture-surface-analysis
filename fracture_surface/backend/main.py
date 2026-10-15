@@ -156,25 +156,6 @@ KO_LABELS = {
     "Intergranular": "입계 파괴",
 }
 
-
-# ═══════════════════════════════════════════════════════
-# 판정 규칙
-# ═══════════════════════════════════════════════════════
-
-DUCTILE_DOMINANT = 0.60
-GAP_THRESHOLD = 0.10
-
-
-PRIORITY_GROUPS = [
-    ("Fatigue",),
-    (
-        "Cleavage",
-        "Intergranular",
-    ),
-    ("Ductile",),
-]
-
-
 # ═══════════════════════════════════════════════════════
 # Grad-CAM 색상
 # BGR 기준
@@ -822,215 +803,28 @@ async def analyze_fracture(
     ].item()
 
 
-    # ─────────────────────────────────────────────
-    # STEP 1
-    # 연성 파괴 60% 이상 → 연성 우선
-    # ─────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════
+    # 최종 파손 유형 결정
+    # Fatigue 검출 시 Fatigue 우선
+    # ═══════════════════════════════════════════════════
 
-    if (
-        ductile_prob
-        >= DUCTILE_DOMINANT
-    ):
+    detected = [name for name in CNN_CLASSES if name in masks_dict]
 
-        final_en = "Ductile"
+    if "Fatigue" in detected:
+        final_en = "Fatigue"
+        decision_path = "Fatigue 검출 → Fatigue 우선"
 
-        decision_path = (
-            "STEP 1 "
-            f"(Ductile {ductile_prob * 100:.1f}% "
-            f"≥ {DUCTILE_DOMINANT * 100:.0f}%)"
+    elif detected:
+        final_en = max(
+            detected,
+            key=lambda n: probs_tensor[CNN_CLASSES.index(n)].item(),
         )
-
+        decision_path = f"검출 클래스 중 최고 확률 ({final_en})"
 
     else:
-
-        # Grad-CAM 통과 클래스만 후보
-        candidates = [
-            (
-                name,
-                probs_tensor[
-                    CNN_CLASSES.index(
-                        name
-                    )
-                ].item(),
-            )
-
-            for name
-            in CNN_CLASSES
-
-            if name in masks_dict
-        ]
-
-
-        # ─────────────────────────────────────────────
-        # STEP 2
-        # Grad-CAM 후보 없음
-        # ─────────────────────────────────────────────
-
-        if not candidates:
-
-            final_en = CNN_CLASSES[
-                int(
-                    probs_tensor
-                    .argmax()
-                    .item()
-                )
-            ]
-
-            decision_path = (
-                "STEP 2 폴백 "
-                "(GradCAM 통과 클래스 없음 → argmax)"
-            )
-
-            print(
-                "[경고] GradCAM 통과 클래스 없음 "
-                "→ softmax argmax 폴백"
-            )
-
-
-        else:
-
-            candidates.sort(
-                key=lambda x: x[1],
-                reverse=True,
-            )
-
-            (
-                top1_name,
-                top1_prob,
-            ) = candidates[0]
-
-
-            # ─────────────────────────────────────────
-            # STEP 3-A
-            # 후보 하나
-            # ─────────────────────────────────────────
-
-            if len(
-                candidates
-            ) == 1:
-
-                final_en = (
-                    top1_name
-                )
-
-                decision_path = (
-                    f"STEP 3 단일 후보 "
-                    f"({top1_name})"
-                )
-
-
-            else:
-
-                top2_prob = (
-                    candidates[
-                        1
-                    ][1]
-                )
-
-                gap_top12 = (
-                    top1_prob
-                    - top2_prob
-                )
-
-
-                # ─────────────────────────────────────
-                # STEP 3-B
-                # 10%p 이상 차이
-                # ─────────────────────────────────────
-
-                if (
-                    gap_top12
-                    >= GAP_THRESHOLD
-                ):
-
-                    final_en = (
-                        top1_name
-                    )
-
-                    decision_path = (
-                        "STEP 3 압도 "
-                        f"(차이 {gap_top12 * 100:.1f}%p "
-                        f"≥ {GAP_THRESHOLD * 100:.0f}%p)"
-                    )
-
-
-                # ─────────────────────────────────────
-                # STEP 3-C
-                # 박빙 → 우선순위
-                # ─────────────────────────────────────
-
-                else:
-
-                    close_group = [
-                        (
-                            name,
-                            prob,
-                        )
-
-                        for (
-                            name,
-                            prob,
-                        )
-                        in candidates
-
-                        if (
-                            top1_prob
-                            - prob
-                        )
-                        < GAP_THRESHOLD
-                    ]
-
-
-                    final_en = None
-
-
-                    for group in PRIORITY_GROUPS:
-
-                        in_group = [
-                            (
-                                n,
-                                p,
-                            )
-
-                            for (
-                                n,
-                                p,
-                            )
-                            in close_group
-
-                            if n in group
-                        ]
-
-
-                        if in_group:
-
-                            in_group.sort(
-                                key=lambda x: x[1],
-                                reverse=True,
-                            )
-
-                            final_en = (
-                                in_group[
-                                    0
-                                ][0]
-                            )
-
-                            break
-
-
-                    if final_en is None:
-
-                        final_en = (
-                            top1_name
-                        )
-
-
-                    decision_path = (
-                        "STEP 3 박빙 우선순위 "
-                        f"(박빙 {len(close_group)}개, "
-                        f"선택: {final_en})"
-                    )
-
+        final_en = CNN_CLASSES[int(probs_tensor.argmax().item())]
+        decision_path = "폴백: 검출 클래스 없음 → argmax"
+        print("[경고] GradCAM 검출 클래스 없음 → softmax argmax 폴백")
 
     # ═══════════════════════════════════════════════════
     # 최종 분석 정보
@@ -1147,21 +941,15 @@ async def analyze_fracture(
     # 클래스별 확률
     # ═══════════════════════════════════════════════════
 
-    similarities = {
-        KO_LABELS[
-            CNN_CLASSES[i]
-        ]:
-        (
-            f"{probs_tensor[i].item() * 100:.1f}%"
-        )
+    # Grad-CAM 자체가 실패해 masks_dict가 비어 있으면 전부 표시
+    show_all = len(masks_dict) == 0
 
-        for i
-        in range(
-            len(
-                CNN_CLASSES
-            )
-        )
-    }
+    similarities = {}
+    for i, name in enumerate(CNN_CLASSES):
+        if show_all or name in masks_dict or name == final_en:
+            similarities[KO_LABELS[name]] = f"{probs_tensor[i].item() * 100:.1f}%"
+        else:
+            similarities[KO_LABELS[name]] = "-"
 
 
     # ═══════════════════════════════════════════════════

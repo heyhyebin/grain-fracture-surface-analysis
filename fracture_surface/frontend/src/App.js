@@ -2539,11 +2539,11 @@ const clearHistory = async () => {
                             {Object.entries(
                               result.similarities
                             )
-                              .sort(
-                                (a, b) =>
-                                  parseFloat(b[1]) -
-                                  parseFloat(a[1])
-                              )
+                              .sort((a, b) => {
+  const va = parseFloat(a[1]);
+  const vb = parseFloat(b[1]);
+  return (isNaN(vb) ? -1 : vb) - (isNaN(va) ? -1 : va);
+})
                               .map(
                                 ([name, value]) => {
                                   const percent =
@@ -2575,6 +2575,8 @@ const clearHistory = async () => {
                                           className={`text-[11px] ${
                                             isPredicted
                                               ? "font-bold text-slate-900"
+                                              : value === "-"
+                                              ? "font-medium text-slate-300"
                                               : "font-medium text-slate-500"
                                           }`}
                                         >
