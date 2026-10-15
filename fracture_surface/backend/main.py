@@ -805,14 +805,21 @@ async def analyze_fracture(
 
     # ═══════════════════════════════════════════════════
     # 최종 파손 유형 결정
-    # Fatigue 검출 시 Fatigue 우선
+    # Fatigue가 검출되고 확률 60% 이상이면 Fatigue 우선
     # ═══════════════════════════════════════════════════
+
+    FATIGUE_THRESHOLD = 0.60
 
     detected = [name for name in CNN_CLASSES if name in masks_dict]
 
-    if "Fatigue" in detected:
+    fatigue_prob = probs_tensor[CNN_CLASSES.index("Fatigue")].item()
+
+    if "Fatigue" in detected and fatigue_prob >= FATIGUE_THRESHOLD:
         final_en = "Fatigue"
-        decision_path = "Fatigue 검출 → Fatigue 우선"
+        decision_path = (
+            f"Fatigue 검출 및 확률 {fatigue_prob * 100:.1f}% "
+            f"(≥{FATIGUE_THRESHOLD * 100:.0f}%) → Fatigue 우선"
+        )
 
     elif detected:
         final_en = max(
