@@ -194,3 +194,59 @@ def to_b64(img_np, fmt="PNG"):
     b64  = base64.b64encode(buf.getvalue()).decode()
     mime = "png" if fmt == "PNG" else "jpeg"
     return f"data:image/{mime};base64,{b64}"
+
+def _position_label(cx, cy, W, H):
+    col = "좌측" if cx < W / 3 else ("우측" if cx >= 2 * W / 3 else "중앙")
+    row = "상단" if cy < H / 3 else ("하단" if cy >= 2 * H / 3 else "중앙")
+
+    if row == "중앙" and col == "중앙":
+        return "중앙부"
+    if row == "중앙":
+        return f"{col} 영역"
+    if col == "중앙":
+        return f"{row} 영역"
+    return f"{col} {row}"
+
+
+def summarize_gradcam_regions(masks_dict, overlap_masks, probs_by_class, img_shape):
+    """
+    LLM에 전달할 Grad-CAM++ 영역 요약.
+    masks_dict      : 검출된 클래스별 이진 마스크
+    overlap_masks   : split_solo_overlap()의 겹침 마스크
+    probs_by_class  : {"Cleavage": 0.12, ...} (softmax, 0~1)
+    """
+    H, W = img_shape[:2]
+    total = H * W
+    summary = {}
+
+    for name, mask in masks_dict.items():
+        active = mask > 0
+        area = int(active.sum())
+        if area == 0:
+            continue
+
+        ys, xs = np.nonzero(active)
+        cx, cy = float(xs.mean()), float(ys.mean())
+
+        # 활성 영역이 이미지에서 퍼진 정도 (bounding box 기준)
+        bbox_ratio = ((xs.max() - xs.min() + 1) * (ys.max() - ys.min() + 1)) / total
+
+        overlap_area = int((overlap_masks.get(name, np.zeros_like(mask)) > 0).sum())
+
+        overlaps_with = [
+            other for other, m in masks_dict.items()
+            if other != name and bool(np.any(active & (m > 0)))
+        ]
+
+        n_labels, _ = cv2.connectedComponents(mask, connectivity=8)
+
+        summary[name] = {
+            "probability": round(float(probs_by_class[name]) * 100, 1),
+            "position": _position_label(cx, cy, W, H),
+            "spread": "넓게 분포" if bbox_ratio >= 0.5 else "국부적으로 집중",
+            "region_count": int(n_labels - 1),
+            "overlap_ratio": round(overlap_area / area * 100, 1),
+            "overlaps_with": overlaps_with,
+        }
+
+    return summary

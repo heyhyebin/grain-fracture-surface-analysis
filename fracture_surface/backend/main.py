@@ -47,14 +47,18 @@ from gradcam import (
     draw_dashed_contour,
     extract_contours_json,
     to_b64,
+    summarize_gradcam_regions, 
 )
 
 # LLM 분석
 from llm_service import (
     generate_llm_analysis,
     generate_compare_analysis,
+    generate_report,
 )
 
+
+from rag_service import retrieve_references, format_references_for_prompt, public_references
 
 # ═══════════════════════════════════════════════════════
 # FastAPI 앱 생성
@@ -617,6 +621,10 @@ async def analyze_fracture(
 
     gradcam_image = None
 
+    gradcam_summary = {}
+    
+    gradcam_png_bytes = None
+
     gradcam_layers = {}
 
     gradcam_masks = {}
@@ -695,12 +703,31 @@ async def analyze_fracture(
         # 통합 Grad-CAM 이미지
         # ─────────────────────────────────────────────
 
-        gradcam_image = to_b64(
-            build_contour_image(
-                img_rgb,
-                solo_masks,
-                overlap_masks,
-            )
+                # 통합 Grad-CAM 이미지
+        contour_img = build_contour_image(
+            img_rgb,
+            solo_masks,
+            overlap_masks,
+        )
+
+        gradcam_image = to_b64(contour_img)
+
+        # LLM에 두 번째 이미지로 전달할 PNG bytes
+        _buf = io.BytesIO()
+        Image.fromarray(contour_img).save(_buf, format="PNG")
+        gradcam_png_bytes = _buf.getvalue()
+
+        # LLM에 전달할 영역 요약
+        probs_by_class = {
+            n: probs_tensor[i].item()
+            for i, n in enumerate(CNN_CLASSES)
+        }
+
+        gradcam_summary = summarize_gradcam_regions(
+            masks_dict,
+            overlap_masks,
+            probs_by_class,
+            (H, W),
         )
 
 
@@ -963,12 +990,44 @@ async def analyze_fracture(
     # Gemma 멀티모달 설명 생성
     # ═══════════════════════════════════════════════════
 
+    try:
+        references = retrieve_references(final_en)
+        references_text = format_references_for_prompt(references)
+        references_public = public_references(references)
+    except Exception as rag_error:
+        print(f"[RAG] 검색 실패, 기존 분석 계속 진행: {rag_error}")
+        references_text = ""
+        references_public = []
+
+    gradcam_llm_bytes = None
+    try:
+        final_mask = masks_dict.get(final_en)
+        if final_mask is not None and np.any(final_mask > 0):
+            aligned_rgb = img_rgb.copy()
+            contours, _ = cv2.findContours(final_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(aligned_rgb, contours, -1, (255, 80, 40), thickness=2, lineType=cv2.LINE_AA)
+            cam_buffer = io.BytesIO()
+            Image.fromarray(aligned_rgb).save(cam_buffer, format="PNG")
+            gradcam_llm_bytes = cam_buffer.getvalue()
+    except Exception as cam_error:
+        print(f"[Grad-CAM → Gemma] 오버레이 생성 실패: {cam_error}")
+    print(
+        "[Grad-CAM → Gemma]",
+        "이미지 전달 성공" if gradcam_llm_bytes else "이미지 없음",
+        "| 바이트:",
+        len(gradcam_llm_bytes) if gradcam_llm_bytes else 0
+    )
     llm_result = (
         generate_llm_analysis(
             prediction=prediction,
             confidence_percent=final_percent,
             material=material,
             image_bytes=image_bytes,
+            gradcam_summary=gradcam_summary,
+            probabilities=similarities,
+            decision_path=decision_path,
+            gradcam_image_bytes=gradcam_llm_bytes,
+            references_text=references_text,
         )
     )
 
@@ -1109,6 +1168,14 @@ async def analyze_fracture(
 
         "gradcam_contours":
             gradcam_contours,
+
+        "references": references_public,
+
+        "gradcam_summary":
+            gradcam_summary,
+
+        "decision_path":
+            decision_path,
 
 
         # ─────────────────────────────────────────────
@@ -1476,6 +1543,42 @@ async def analyze_phase(
 # ═══════════════════════════════════════════════════════
 # 직접 실행
 # ═══════════════════════════════════════════════════════
+@app.post("/report")
+async def make_report(payload: dict):
+
+    try:
+        conf_raw = str(payload.get("confidence", "0")).replace("%", "").strip()
+
+        try:
+            confidence_percent = float(conf_raw)
+        except ValueError:
+            confidence_percent = 0.0
+
+        prediction_en = payload.get("prediction_en", "")
+        prediction = payload.get("prediction") or KO_LABELS.get(prediction_en, "")
+
+        if prediction not in KO_LABELS.values():
+            return {"status": "error", "message": "분류 결과가 올바르지 않습니다."}
+
+        report = generate_report(
+            prediction=prediction,
+            prediction_en=prediction_en,
+            confidence_percent=confidence_percent,
+            material=payload.get("material", ""),
+            probabilities=payload.get("similarities", {}),
+            gradcam_summary=payload.get("gradcam_summary", {}),
+            decision_path=payload.get("decision_path", ""),
+            feature=payload.get("feature", ""),
+            obs1=payload.get("visual_observation_1", ""),
+            obs2=payload.get("visual_observation_2", ""),
+        )
+
+        return {"status": "success", **report}
+
+    except Exception as e:
+        print(f"보고서 생성 오류: {e}")
+        return {"status": "error", "message": "보고서 생성 중 오류가 발생했습니다."}
+
 
 if __name__ == "__main__":
 
