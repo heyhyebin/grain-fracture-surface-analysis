@@ -54,8 +54,10 @@ from gradcam import (
 from llm_service import (
     generate_llm_analysis,
     generate_compare_analysis,
-    generate_report,
 )
+
+# 보고서 생성
+from createReport import generate_report
 
 
 from rag_service import retrieve_references, format_references_for_prompt, public_references
