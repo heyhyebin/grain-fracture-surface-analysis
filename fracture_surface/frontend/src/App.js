@@ -1,4 +1,3 @@
-
 import ReferenceCard from "./components/ReferenceCard";
 import {
   useState,
@@ -10,7 +9,14 @@ import {
 
 import { createPortal } from "react-dom";
 
-import { addHistoryItem, fetchHistory, clearAllHistory } from "./firebase";
+import {
+  addHistoryItem,
+  fetchHistory,
+  clearAllHistory,
+  saveReport,
+  fetchReport,
+  fetchReportIds,
+} from "./firebase";
 
 import {
   buildPhaseHistoryItem,
@@ -380,6 +386,58 @@ function contoursToPolylines(contoursForClass) {
     }
     return { poly, overlaps: c.overlaps_with || [] };
   });
+}
+
+// 보고서에 함께 저장할 Grad-CAM++ 스냅샷 (작은 JPEG data URL)
+//  - 방금 분석한 결과: 서버가 준 gradcam_image 를 축소
+//  - 기록에서 불러온 결과: base_image + gradcam_contours 로 윤곽선을 다시 그림
+//  Firestore 문서 1MB 한도를 넘지 않도록 긴 변 maxSide px, JPEG 품질 quality 로 저장
+async function makeGradcamSnapshot(result, maxSide = 800, quality = 0.8) {
+  if (!result) return null;
+
+  try {
+    const hasContours =
+      result.gradcam_contours &&
+      Object.keys(result.gradcam_contours).length > 0;
+
+    const src = result.gradcam_image || (hasContours ? result.base_image : null);
+    if (!src) return null;
+
+    const img = await loadImage(src);
+    const W = img.naturalWidth;
+    const H = img.naturalHeight;
+    const k = Math.min(1, maxSide / Math.max(W, H));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(W * k);
+    canvas.height = Math.round(H * k);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    if (!result.gradcam_image && hasContours) {
+      ctx.save();
+      ctx.scale(k, k);
+      for (const [name, list] of Object.entries(result.gradcam_contours)) {
+        const items = contoursToPolylines(list || []);
+        const solo = items.filter((it) => it.overlaps.length === 0).map((it) => it.poly);
+        const overlap = items.filter((it) => it.overlaps.length > 0).map((it) => it.poly);
+        const color = CLASS_COLORS[name] || "#111827";
+        if (solo.length) drawPolylines(ctx, solo, color, { lineWidth: 3 / k });
+        if (overlap.length) {
+          drawPolylines(ctx, overlap, color, {
+            lineWidth: 4.5 / k,
+            dashPattern: [16 / k, 10 / k],
+          });
+        }
+      }
+      ctx.restore();
+    }
+
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch (err) {
+    console.error("Grad-CAM 스냅샷 생성 실패:", err);
+    return null;
+  }
 }
 
 function GradcamView({
@@ -1084,7 +1142,10 @@ function ModalShell({
   );
 }
 
-function ReportModal({ result, previewUrl, report, loading, error, onClose }) {
+function ReportModal({ result, previewUrl, report, loading, error, onClose, saveState }) {
+  // 기록에서 연 결과는 gradcam_image 가 비어 있으므로 저장된 스냅샷을 대신 표시
+  const gradcamSrc = result.gradcam_image || report?.gradcam_snapshot || null;
+
   const probs = Object.entries(result.similarities || {}).sort((a, b) => {
     const va = parseFloat(a[1]);
     const vb = parseFloat(b[1]);
@@ -1161,6 +1222,20 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose }) {
             생성 시각: {report?.generated_at || "-"} · 재질:{" "}
             {report?.material_label || "-"}
           </p>
+          {saveState?.status === "saving" && (
+            <p className="no-print text-[11px] text-slate-400 mt-1">보고서 저장 중…</p>
+          )}
+          {saveState?.status === "saved" && (
+            <p className="no-print text-[11px] text-emerald-600 mt-1">
+              ✓ 분석 기록에 저장됨
+              {saveState.at ? ` · ${new Date(saveState.at).toLocaleString()}` : ""}
+            </p>
+          )}
+          {saveState?.status === "error" && (
+            <p className="no-print text-[11px] text-red-500 mt-1">
+              보고서 저장 실패: {saveState.message}
+            </p>
+          )}
         </div>
 
         {/* 1. 이미지 */}
@@ -1177,8 +1252,8 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose }) {
             <div>
               <p className="text-xs text-slate-500 mb-1">Grad-CAM++ (모델 주목 영역)</p>
               <div className="h-[260px] rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden">
-                {result.gradcam_image ? (
-                  <img src={result.gradcam_image} alt="Grad-CAM++" className="w-full h-full object-contain" />
+                {gradcamSrc ? (
+                  <img src={gradcamSrc} alt="Grad-CAM++" className="w-full h-full object-contain" />
                 ) : (
                   <p className="text-xs text-slate-400">Grad-CAM++ 이미지 없음</p>
                 )}
@@ -1364,9 +1439,29 @@ export default function App() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
 
+  // 보고서 ↔ 분석 기록 연결
+  const [historyDocId, setHistoryDocId] = useState(null);   // 지금 보고 있는 결과의 기록 docId
+  const historySaveRef = useRef(null);                       // 저장 중인 기록의 Promise<docId>
+  const reportLoadReqRef = useRef(0);                        // 늦게 도착한 불러오기 응답 무시용
+  const [reportSave, setReportSave] = useState(null);        // {status, at?, message?}
+  const [reportIds, setReportIds] = useState(() => new Set()); // 보고서가 있는 기록 docId
+
+  // 기록 목록이 바뀌면 어떤 기록에 보고서가 있는지 다시 조회 (목록 '보고서' 배지)
+  useEffect(() => {
+    let alive = true;
+    fetchReportIds(history.map((h) => h.docId))
+      .then((ids) => {
+        if (alive) setReportIds(ids);
+      })
+      .catch((err) => console.error("보고서 목록 조회 실패:", err));
+    return () => {
+      alive = false;
+    };
+  }, [history]);
+
   const [activeTab, setActiveTab] = useState("fracture");
 
-  const [detailTab, setDetailTab] = useState("llm");
+  const [detailTab, setDetailTab] = useState("rag"); // LLM 설명 탭은 보고서로 통합되어 제거
 
   const phaseFileRef = useRef(null);
 
@@ -1816,6 +1911,10 @@ useEffect(() => {
         setReport(null);
         setShowReport(false);
         setReportError("");
+        setReportSave(null);
+        setHistoryDocId(null);
+        historySaveRef.current = null;
+        reportLoadReqRef.current++;
 
         setShowSimilarModal(
           false
@@ -1853,12 +1952,15 @@ useEffect(() => {
   };
 
   try {
-    await addHistoryItem(newItem);
+    const docId = await addHistoryItem(newItem);
+    setHistoryDocId(docId);
     const items = await fetchHistory();
     setHistory(items);
+    return docId;
   } catch (err) {
     console.error("Firestore 기록 저장 실패:", err);
     alert("기록 저장 중 오류가 발생했습니다. 콘솔을 확인해주세요.");
+    return null;
   }
 };
 
@@ -1871,6 +1973,10 @@ useEffect(() => {
       setReport(null);
       setShowReport(false);
       setReportError("");
+      setReportSave(null);
+      setHistoryDocId(item.docId || null);
+      historySaveRef.current = null;
+      loadSavedReport(item.docId);
 
       setPreviewUrl(
         item.image
@@ -1937,6 +2043,9 @@ const clearHistory = async () => {
     console.error("Firestore 기록 삭제 실패:", err);
   }
   setHistory([]);
+  setReportIds(new Set());
+  setHistoryDocId(null);
+  setReportSave(null);
   setSelectedCompareIds([]);
   setShowCompareModal(false);
   setCompareSummary(null);
@@ -1978,6 +2087,10 @@ const clearHistory = async () => {
         setReport(null);
         setShowReport(false);
         setReportError("");
+        setReportSave(null);
+        setHistoryDocId(null);
+        historySaveRef.current = null;
+        reportLoadReqRef.current++;
 
         const res =
           await fetch(
@@ -2008,10 +2121,12 @@ const clearHistory = async () => {
           data
         );
 
-        await saveHistory(
+        // 보고서를 기록 저장이 끝나기 전에 열어도 연결되도록 Promise 를 보관
+        historySaveRef.current = saveHistory(
           data,
           thumbnailBase64
         );
+        await historySaveRef.current;
       } catch (err) {
         console.error(
           "분석 결과 처리 오류:",
@@ -2028,6 +2143,63 @@ const clearHistory = async () => {
       }
     };
 
+  // 기록에 저장된 보고서 불러오기 (있으면 '보고서 생성' 시 재생성 없이 바로 표시)
+  const loadSavedReport = async (docId) => {
+    const req = ++reportLoadReqRef.current;
+    if (!docId) return;
+    try {
+      const saved = await fetchReport(docId);
+      if (req !== reportLoadReqRef.current || !saved) return;
+      setReport({
+        ...saved.report,
+        status: "success",
+        gradcam_snapshot: saved.gradcam_snapshot || null,
+      });
+      setReportSave({ status: "saved", at: saved.savedAt });
+    } catch (err) {
+      console.error("보고서 불러오기 실패:", err);
+    }
+  };
+
+  // 생성된 보고서를 현재 분석 기록에 연결해 Firestore 에 저장
+  const persistReport = async (data, targetResult) => {
+    try {
+      setReportSave({ status: "saving" });
+
+      const docId =
+        historyDocId ||
+        (historySaveRef.current ? await historySaveRef.current : null);
+
+      if (!docId) {
+        setReportSave({
+          status: "error",
+          message: "분석 기록이 저장되지 않아 보고서를 연결할 수 없습니다.",
+        });
+        return;
+      }
+
+      const snapshot = await makeGradcamSnapshot(targetResult);
+
+      const savedAt = await saveReport(docId, data, {
+        gradcamSnapshot: snapshot,
+        prediction: targetResult.prediction,
+        confidence: targetResult.confidence,
+      });
+
+      if (savedAt === null) {
+        setReportSave(null); // DB_STORE=false
+        return;
+      }
+
+      setReport((prev) => (prev === data ? { ...data, gradcam_snapshot: snapshot } : prev));
+      setReportSave({ status: "saved", at: savedAt });
+      setReportIds((prev) => new Set(prev).add(docId));
+    } catch (err) {
+      console.error("보고서 저장 오류:", err);
+      setReportSave({ status: "error", message: err.message || "알 수 없는 오류" });
+    }
+  };
+
     const openReport = async () => {
     if (!result) {
       alert("먼저 이미지를 분석해주세요.");
@@ -2036,7 +2208,9 @@ const clearHistory = async () => {
 
     setShowReport(true);
 
-    if (report) return; // 이미 만든 보고서는 재사용
+    if (report) return; // 이미 만든(또는 저장된) 보고서는 재사용
+
+    reportLoadReqRef.current++; // 진행 중인 불러오기 응답이 새 보고서를 덮지 않도록
 
     try {
       setReportLoading(true);
@@ -2068,6 +2242,7 @@ const clearHistory = async () => {
       }
 
       setReport(data);
+      persistReport(data, result); // 저장 실패해도 보고서 표시는 유지
     } catch (err) {
       console.error("보고서 생성 오류:", err);
       setReportError(err.message || "보고서 생성 중 오류가 발생했습니다.");
@@ -2334,6 +2509,11 @@ const clearHistory = async () => {
 
                           <p className="text-[11px] text-slate-400 mt-1">
                             {item.time}
+                            {reportIds.has(item.docId) && (
+                              <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                보고서
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
@@ -2788,9 +2968,8 @@ const clearHistory = async () => {
 
               {/* 하단 기능 탭 */}
               <div className="border-t border-slate-200 p-5">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   {[
-                    { key: "llm", label: "LLM 설명" },
                     { key: "rag", label: "관련 문헌 검색 결과" },
                     { key: "similar", label: "유사 이미지" },
                   ].map((tab) => (
@@ -2810,30 +2989,6 @@ const clearHistory = async () => {
 
                 {result && (
                   <div className="mt-5 rounded-xl border border-slate-200 p-5">
-                    {detailTab === "llm" && (
-                      <div className="space-y-4">
-                        <h3 className="font-bold">멀티모달 LLM 분석 설명</h3>
-                        {[
-                          result.feature,
-                          result.visual_observation_1,
-                          result.visual_observation_2,
-                          result.mechanism_relation,
-                          result.cause_explanation,
-                        ]
-                          .filter(Boolean)
-                          .map((text, i) => (
-                            <p key={i} className="text-sm leading-7 text-slate-700">
-                              {text}
-                            </p>
-                          ))}
-                        {!result.feature && !result.visual_observation_1 && (
-                          <p className="text-sm text-slate-400">
-                            생성된 설명이 없습니다.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
                     {detailTab === "rag" && (
                       <ReferenceCard references={result.references || []} />
                     )}
@@ -3148,6 +3303,7 @@ const clearHistory = async () => {
           report={report}
           loading={reportLoading}
           error={reportError}
+          saveState={reportSave}
           onClose={() => setShowReport(false)}
         />
       )}

@@ -7,11 +7,15 @@ import {
   collection,
   addDoc,
   getDocs,
+  getDoc,
+  setDoc,
   deleteDoc,
   doc,
   orderBy,
   query,
   limit,
+  where,
+  documentId,
 } from "firebase/firestore";
 
 
@@ -42,6 +46,11 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 
 const HISTORY_COLLECTION = "analysisHistory";
+
+// 보고서는 분석 기록과 별도 컬렉션에 저장한다.
+//  - 문서 ID = 분석 기록의 docId (1:1 연결, 조회가 단순)
+//  - 기록 문서에는 base_image 등이 이미 들어 있어 1MB 한도에 가까울 수 있으므로 분리
+const REPORT_COLLECTION = "analysisReports";
 
 
 // ==========================================
@@ -187,10 +196,90 @@ export async function clearAllHistory() {
       )
     );
 
+    await clearAllReports();
+
     console.log("Firestore 전체 기록 삭제 완료");
 
   } catch (error) {
     console.error("Firestore 기록 삭제 실패:", error);
     throw error;
   }
+}
+
+
+// ==========================================
+// 7. 보고서 저장 / 불러오기
+// ==========================================
+
+/**
+ * 보고서 저장 (같은 기록에 다시 저장하면 덮어씀)
+ * @param {string} historyDocId  analysisHistory 문서 ID
+ * @param {object} report        /report 응답 (characteristics, basis, cause ...)
+ * @param {object} extra         { gradcamSnapshot, prediction, confidence }
+ */
+export async function saveReport(historyDocId, report, extra = {}) {
+  if (!DB_STORE) {
+    console.log("[DB_STORE=false] 보고서 저장 건너뜀");
+    return null;
+  }
+  if (!historyDocId) {
+    throw new Error("연결할 분석 기록(docId)이 없습니다.");
+  }
+
+  const { status, ...reportBody } = report || {};
+
+  const payload = sanitizeForFirestore({
+    historyDocId,
+    report: reportBody,
+    gradcam_snapshot: extra.gradcamSnapshot || null,
+    prediction: extra.prediction || null,
+    confidence: extra.confidence || null,
+    savedAt: Date.now(),
+  });
+
+  await setDoc(doc(db, REPORT_COLLECTION, historyDocId), payload);
+  console.log("Firestore 보고서 저장 성공:", historyDocId);
+  return payload.savedAt;
+}
+
+/** 기록 1건의 보고서 불러오기. 없으면 null */
+export async function fetchReport(historyDocId) {
+  if (!DB_STORE || !historyDocId) return null;
+
+  const snap = await getDoc(doc(db, REPORT_COLLECTION, historyDocId));
+  if (!snap.exists()) return null;
+
+  return restoreFromFirestore(snap.data());
+}
+
+/** 목록에 '보고서' 배지를 붙이기 위해, 보고서가 있는 기록 docId 집합을 반환 */
+export async function fetchReportIds(historyDocIds) {
+  if (!DB_STORE) return new Set();
+
+  const ids = (historyDocIds || []).filter(Boolean);
+  const found = new Set();
+
+  // Firestore 'in' 조건은 한 번에 최대 30개
+  for (let i = 0; i < ids.length; i += 30) {
+    const chunk = ids.slice(i, i + 30);
+    const q = query(
+      collection(db, REPORT_COLLECTION),
+      where(documentId(), "in", chunk)
+    );
+    const snapshot = await getDocs(q);
+    snapshot.docs.forEach((d) => found.add(d.id));
+  }
+
+  return found;
+}
+
+/** 보고서 전체 삭제 (기록 전체 삭제 시 함께 호출) */
+export async function clearAllReports() {
+  if (!DB_STORE) return;
+
+  const snapshot = await getDocs(collection(db, REPORT_COLLECTION));
+  await Promise.all(
+    snapshot.docs.map((d) => deleteDoc(doc(db, REPORT_COLLECTION, d.id)))
+  );
+  console.log("Firestore 보고서 전체 삭제 완료");
 }
