@@ -41,6 +41,7 @@ from model import load_model
 # Grad-CAM++
 from gradcam import (
     GradCAMPlusPlus,
+    predict_sliding,
     cam_to_mask,
     split_solo_overlap,
     build_contour_image,
@@ -139,12 +140,13 @@ DEVICE = torch.device(
 MODEL_PATH = os.path.join(
     os.path.dirname(__file__),
     "model",
-    "fractography_best5.pth",
+    "fractography_best.pth",      # train_kaggle.py 결과 (같은 폴더에 fractography_best_config.json)
 )
 
 
-IMG_SIZE = 224
+IMG_SIZE = 224            # 유사 이미지 검색(ResNet18) 전용. CNN 입력 크기는 INFER_CFG["img_size"]
 NUM_CLASSES = 4
+CAM_MAX_CLASSES = 2       # Grad-CAM 을 계산할 최대 클래스 수 (CPU 부담: 패치 수 × 클래스 수 만큼 역전파)
 
 
 CNN_CLASSES = [
@@ -198,7 +200,7 @@ CLASS_COLORS_BGR = {
 # CNN 모델 로드
 # ═══════════════════════════════════════════════════════
 
-model = load_model(
+model, INFER_CFG = load_model(
     model_path=MODEL_PATH,
     device=DEVICE,
     num_classes=NUM_CLASSES,
@@ -250,30 +252,8 @@ gradcam_all = GradCAMPlusPlus(
 # 이미지 전처리
 # ═══════════════════════════════════════════════════════
 
-preprocess = transforms.Compose([
-    transforms.Resize(
-        IMG_SIZE + 32
-    ),
-
-    transforms.CenterCrop(
-        IMG_SIZE
-    ),
-
-    transforms.ToTensor(),
-
-    transforms.Normalize(
-        [
-            0.485,
-            0.456,
-            0.406,
-        ],
-        [
-            0.229,
-            0.224,
-            0.225,
-        ],
-    ),
-])
+# 전처리는 gradcam.make_patches() 에서 수행
+# (원본을 patch_size 격자로 자르고 각 패치를 img_size 로 리사이즈 — 중앙 크롭 없음)
 
 
 # ═══════════════════════════════════════════════════════
@@ -532,31 +512,12 @@ async def analyze_fracture(
     # 이미지 전처리
     # ═══════════════════════════════════════════════════
 
-    input_tensor = (
-        preprocess(
-            image
-        )
-        .unsqueeze(0)
-        .to(
-            DEVICE
-        )
+    probs_np_mean, patch_probs, patch_boxes = predict_sliding(
+        model, image, INFER_CFG, DEVICE,
     )
-
-
-    # ═══════════════════════════════════════════════════
-    # CNN 추론
-    # ═══════════════════════════════════════════════════
-
-    with torch.no_grad():
-
-        output = model(
-            input_tensor
-        )
-
-        probs_tensor = torch.softmax(
-            output,
-            dim=1,
-        )[0]
+    probs_tensor = torch.from_numpy(probs_np_mean)
+    print(f"슬라이딩 윈도우 패치 {len(patch_boxes)}개 → 평균 확률 "
+          + ", ".join(f"{n} {p * 100:.1f}%" for n, p in zip(CNN_CLASSES, probs_np_mean)))
 
 
     sorted_probs, sorted_indices = torch.sort(
@@ -640,12 +601,14 @@ async def analyze_fracture(
 
     try:
 
-        cams_dict, probs_np = (
-            gradcam_all
-            .generate_all_classes(
-                input_tensor,
-                num_classes=NUM_CLASSES,
-            )
+        probs_np = probs_np_mean
+        cam_classes = [
+            int(i) for i in np.argsort(-probs_np)[:CAM_MAX_CLASSES]
+            if probs_np[i] >= conf_thresh
+        ]
+        # 원본 해상도 (H,W) CAM — 패치별 CAM 을 이어 붙인 결과
+        cams_dict = gradcam_all.generate_sliding(
+            image, cam_classes, INFER_CFG, DEVICE,
         )
 
 
@@ -657,10 +620,7 @@ async def analyze_fracture(
             CNN_CLASSES
         ):
 
-            if (
-                probs_np[i]
-                < conf_thresh
-            ):
+            if i not in cams_dict:
                 continue
 
 
