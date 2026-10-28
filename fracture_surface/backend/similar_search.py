@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms, models
 
+KO_LABELS = {"Cleavage": "취성 파괴", "Ductile": "연성 파괴",
+             "Fatigue": "피로 파괴", "Intergranular": "입계 파괴"}
 
 class SimilarImageSearcher:
     def __init__(
@@ -145,7 +147,8 @@ class SimilarImageSearcher:
 
             results.append({
                 "image_url": "/" + item["path"],
-                "similarity": round(similarity, 4)
+                "similarity": round(similarity, 4),
+                "class_name": KO_LABELS.get(predicted_class, predicted_class),
             })
 
         results.sort(
