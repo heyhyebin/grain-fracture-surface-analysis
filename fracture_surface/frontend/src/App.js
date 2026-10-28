@@ -2510,9 +2510,11 @@ const clearHistory = async () => {
                           <p className="text-[11px] text-slate-400 mt-1">
                             {item.time}
                             {reportIds.has(item.docId) && (
+                              <p>
                               <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                                보고서
+                              보고서
                               </span>
+                              </p>
                             )}
                           </p>
                         </div>
