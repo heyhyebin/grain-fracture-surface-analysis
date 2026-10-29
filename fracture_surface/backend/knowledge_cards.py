@@ -27,6 +27,8 @@ from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 
+from imaging_info import has_scale
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -65,6 +67,28 @@ MATERIAL_SLOT_SIZE = 1
 
 # 검색 결과와 관계없이 항상 넣는 카드 (Grad-CAM++ 강조 영역 ≠ 실제 결함 위치)
 PINNED = {"model_basis": ("XAI-002",)}
+
+# 사용자가 SEM 촬영 정보를 입력했을 때 우선 넣는 카드 (입력 항목, 값) → 카드 ID 순서.
+# 예측 유형·재질에 맞지 않는 카드는 _eligible 에서 걸러진다.
+IMAGING_PINS = {
+    ("location", "origin"): ("LOC-002", "LOC-005", "LOC-001", "LOC-006", "LOC-004", "FAT-012"),
+    ("location", "propagation"): ("IMG-001", "LOC-010", "FAT-003", "LOC-008", "IMG-003", "LOC-007"),
+    ("location", "final"): ("LOC-003", "LOC-010", "DIF-005", "LOC-009", "FAT-008", "LOC-012"),
+    ("location", "overview"): ("MAG-001", "IMG-001", "LOC-011", "IMG-004", "SEM-003"),
+    ("detector", "BSE"): ("SEM-001", "DET-001", "DET-002"),
+    ("detector", "SE"): ("SEM-002",),
+    ("cleaned", "no"): ("DMG-007", "DMG-001", "STR-003"),
+    ("cleaned", "yes"): ("CLN-001",),
+    ("coated", "yes"): ("COAT-001",),
+    ("coated", "no"): ("SEM-005",),
+    ("scale", True): ("MAG-001", "MAG-004", "STR-001", "SCL-001", "IMG-001", "MAG-003",
+                      "SEM-003", "FAT-014", "DUC-011"),
+}
+
+# 입력 항목별 최대 장수와 전체 최대 장수 (프롬프트 길이 제한).
+# 위치와 배율을 함께 입력해도 한쪽이 다른 쪽 카드를 모두 밀어내지 않도록 항목별로 나눈다.
+IMAGING_KEY_LIMITS = {"location": 3, "scale": 2, "detector": 2, "cleaned": 1, "coated": 1}
+IMAGING_SLOT_SIZE = 6
 
 SECTION_LABELS = {
     "feature": "특징",
@@ -210,7 +234,7 @@ def get_store() -> Optional[CardStore]:
 # =========================================================
 
 def _eligible(card: Dict, prediction_en: str, material: str,
-              banned_words: Iterable[str]) -> bool:
+              banned_words: Iterable[str], allow_scale: bool = False) -> bool:
 
     if card["id"] in EXCLUDED_FROM_REPORT:
         return False
@@ -224,8 +248,8 @@ def _eligible(card: Dict, prediction_en: str, material: str,
     if card.get("material", "any") not in ("any", material):
         return False
 
-    # 배율 정보 없음 / SEM 사진에서 볼 수 없는 육안 특징
-    if card.get("requires_scale") or card.get("sem_observable") is False:
+    # 배율·스케일 바를 입력하지 않았으면 크기·간격 카드 제외 / SEM 사진에서 볼 수 없는 육안 특징 제외
+    if (card.get("requires_scale") and not allow_scale) or card.get("sem_observable") is False:
         return False
 
     if any(w in card["text"] for w in banned_words):
@@ -234,10 +258,22 @@ def _eligible(card: Dict, prediction_en: str, material: str,
     return True
 
 
+def _imaging_pin_groups(imaging: Optional[Dict]) -> List[tuple]:
+    """입력된 촬영 정보별 (항목명, 후보 카드 ID 목록). 입력하지 않은 항목은 빠진다."""
+    imaging = imaging or {}
+    keys = [(k, imaging.get(k)) for k in ("location", "scale", "detector", "cleaned", "coated")]
+    keys[1] = ("scale", has_scale(imaging))
+
+    return [(key[0], IMAGING_PINS[key]) for key in keys if key in IMAGING_PINS]
+
+
 def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
-                 cam_query: str = "", banned_words: Iterable[str] = ()) -> List[Dict]:
+                 cam_query: str = "", banned_words: Iterable[str] = (),
+                 imaging: Optional[Dict] = None) -> List[Dict]:
     """
     보고서 항목별로 카드를 고른다. 반환: 카드 dict 목록 (각 카드에 "slot" 추가).
+    imaging: imaging_info.normalize() 결과. 입력된 촬영 정보에 맞는 카드를 먼저 넣고,
+             배율·스케일 바가 있으면 크기·간격 카드도 허용한다. 없거나 모두 모름이면 기존과 같다.
     카드 파일이 없거나 오류가 나면 빈 리스트.
     """
     store = get_store()
@@ -247,10 +283,11 @@ def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
 
     material = "" if material in UNKNOWN_MATERIALS else material
     banned_words = tuple(banned_words)
+    allow_scale = has_scale(imaging)
 
     eligible = [
         i for i, c in enumerate(store.cards)
-        if _eligible(c, prediction_en, material, banned_words)
+        if _eligible(c, prediction_en, material, banned_words, allow_scale)
     ]
 
     queries = {
@@ -273,6 +310,19 @@ def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
         for i in (pinned + ranked)[:k]:
             chosen.append(i)
             slots[i] = slot
+
+    # 촬영 정보 카드: 입력 항목마다 IMAGING_KEY_LIMITS 장까지, 전체 IMAGING_SLOT_SIZE 장까지
+    id_to_idx = {store.cards[i]["id"]: i for i in eligible}
+    for key, cids in _imaging_pin_groups(imaging):
+        taken = 0
+        for cid in cids:
+            if taken >= IMAGING_KEY_LIMITS.get(key, 1) or len(chosen) >= IMAGING_SLOT_SIZE:
+                break
+            i = id_to_idx.get(cid)
+            if i is not None and i not in slots:
+                chosen.append(i)
+                slots[i] = "imaging"
+                taken += 1
 
     for slot, sections, k, query_kind in SLOTS:
         take(slot, [i for i in eligible if store.cards[i]["section"] in sections], k, query_kind)

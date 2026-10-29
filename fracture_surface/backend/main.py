@@ -59,6 +59,7 @@ from llm_service import (
 )
 
 
+import imaging_info
 from rag_service import retrieve_references, format_references_for_prompt, public_references
 
 # ═══════════════════════════════════════════════════════
@@ -473,13 +474,29 @@ async def root():
 async def analyze_fracture(
     file: UploadFile = File(...),
     material: str = Form(""),
+    # SEM 촬영 정보 (모두 선택, 비우면 "모름")
+    sem_magnification: str = Form(""),
+    sem_scale_bar_um: str = Form(""),
+    sem_location: str = Form(""),
+    sem_detector: str = Form(""),
+    sem_cleaned: str = Form(""),
+    sem_coated: str = Form(""),
     conf_thresh: float = Form(0.05),
     cam_percentile: float = Form(80.0),
     min_area_ratio: float = Form(0.005),
 ):
 
+    imaging = imaging_info.normalize({
+        "magnification": sem_magnification,
+        "scale_bar_um": sem_scale_bar_um,
+        "location": sem_location,
+        "detector": sem_detector,
+        "cleaned": sem_cleaned,
+        "coated": sem_coated,
+    })
+
     print(
-        f"요청 수신 — 재질: {material}"
+        f"요청 수신 — 재질: {material} · 촬영 정보: {imaging_info.label(imaging)}"
     )
 
     model.eval()
@@ -988,6 +1005,7 @@ async def analyze_fracture(
             decision_path=decision_path,
             gradcam_image_bytes=gradcam_llm_bytes,
             references_text=references_text,
+            imaging=imaging,
         )
     )
 
@@ -1097,6 +1115,10 @@ async def analyze_fracture(
 
         "material":
             material,
+
+        # 입력 SEM 촬영 정보 (보고서 생성 시 다시 전달됨)
+        "imaging":
+            imaging,
 
 
         # ─────────────────────────────────────────────
@@ -1531,6 +1553,7 @@ async def make_report(payload: dict):
             feature=payload.get("feature", ""),
             obs1=payload.get("visual_observation_1", ""),
             obs2=payload.get("visual_observation_2", ""),
+            imaging=payload.get("imaging"),
         )
 
         return {"status": "success", **report}

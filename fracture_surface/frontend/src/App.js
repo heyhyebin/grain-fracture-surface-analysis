@@ -40,6 +40,54 @@ const EN_NAMES = {
   "입계 파괴": "Intergranular",
 };
 
+// SEM 촬영 정보 (선택 입력, 비우면 "모름")
+const SEM_LOCATION_LABELS = {
+  origin: "균열 시작점 부근",
+  propagation: "균열 전파 영역",
+  final: "최종 파단부",
+  overview: "파면 전체 (저배율)",
+};
+
+const SEM_DETECTOR_LABELS = {
+  SE: "이차전자 (SE)",
+  BSE: "후방산란전자 (BSE)",
+};
+
+const YES_NO_LABELS = {
+  yes: "함",
+  no: "안 함",
+};
+
+const EMPTY_IMAGING = {
+  magnification: "",
+  scale_bar_um: "",
+  location: "",
+  detector: "",
+  cleaned: "",
+  coated: "",
+};
+
+// 백엔드가 돌려준 imaging(숫자·null 포함)을 입력란 값(문자열)으로 변환
+const toImagingInputs = (imaging) => {
+  const out = { ...EMPTY_IMAGING };
+  Object.keys(out).forEach((k) => {
+    const v = imaging?.[k];
+    out[k] = v === null || v === undefined ? "" : String(v);
+  });
+  return out;
+};
+
+const imagingSummary = (imaging) => {
+  const parts = [];
+  if (imaging.magnification) parts.push(`${imaging.magnification}배`);
+  if (imaging.scale_bar_um) parts.push(`스케일 바 ${imaging.scale_bar_um} µm`);
+  if (imaging.location) parts.push(SEM_LOCATION_LABELS[imaging.location]);
+  if (imaging.detector) parts.push(imaging.detector);
+  if (imaging.cleaned) parts.push(`세척 ${YES_NO_LABELS[imaging.cleaned]}`);
+  if (imaging.coated) parts.push(`코팅 ${YES_NO_LABELS[imaging.coated]}`);
+  return parts.length ? parts.join(" · ") : "모름";
+};
+
 const MATERIAL_LABELS = {
   steel: "강 (Steel)",
   stainless_steel: "스테인리스강",
@@ -1222,6 +1270,11 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
             생성 시각: {report?.generated_at || "-"} · 재질:{" "}
             {report?.material_label || "-"}
           </p>
+          {report?.imaging_label && (
+            <p className="text-xs text-slate-500 mt-1">
+              SEM 촬영 정보: {report.imaging_label}
+            </p>
+          )}
           {saveState?.status === "saving" && (
             <p className="no-print text-[11px] text-slate-400 mt-1">보고서 저장 중…</p>
           )}
@@ -1434,6 +1487,11 @@ export default function App() {
     material,
     setMaterial,
   ] = useState("");
+
+  const [imaging, setImaging] = useState(EMPTY_IMAGING);
+
+  const updateImaging = (key) => (e) =>
+    setImaging((prev) => ({ ...prev, [key]: e.target.value }));
 
   const [
     result,
@@ -2038,6 +2096,8 @@ useEffect(() => {
           ""
       );
 
+      setImaging(toImagingInputs(item.result.imaging));
+
       setShowSimilarModal(
         false
       );
@@ -2127,6 +2187,11 @@ const clearHistory = async () => {
         "material",
         material
       );
+
+      // SEM 촬영 정보 (빈 값 = 모름)
+      Object.entries(imaging).forEach(([key, value]) => {
+        formData.append(`sem_${key}`, value);
+      });
 
       try {
         setUploading(true);
@@ -2276,6 +2341,7 @@ const clearHistory = async () => {
           feature: result.feature,
           visual_observation_1: result.visual_observation_1,
           visual_observation_2: result.visual_observation_2,
+          imaging: result.imaging || {},
         }),
       });
 
@@ -2855,6 +2921,108 @@ const clearHistory = async () => {
                         {uploading ? "분석 중..." : "분석 시작"}
                       </button>
                     </div>
+
+                    <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <summary className="cursor-pointer text-xs text-slate-600">
+                        SEM 촬영 정보 (선택) · {imagingSummary(imaging)}
+                      </summary>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">배율 (x)</span>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="모름"
+                            value={imaging.magnification}
+                            onChange={updateImaging("magnification")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          />
+                        </label>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">스케일 바 (µm)</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="모름"
+                            value={imaging.scale_bar_um}
+                            onChange={updateImaging("scale_bar_um")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          />
+                        </label>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">촬영 위치</span>
+                          <select
+                            value={imaging.location}
+                            onChange={updateImaging("location")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          >
+                            <option value="">모름</option>
+                            {Object.entries(SEM_LOCATION_LABELS).map(([v, l]) => (
+                              <option key={v} value={v}>{l}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">검출기</span>
+                          <select
+                            value={imaging.detector}
+                            onChange={updateImaging("detector")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          >
+                            <option value="">모름</option>
+                            {Object.entries(SEM_DETECTOR_LABELS).map(([v, l]) => (
+                              <option key={v} value={v}>{l}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">세척</span>
+                          <select
+                            value={imaging.cleaned}
+                            onChange={updateImaging("cleaned")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          >
+                            <option value="">모름</option>
+                            {Object.entries(YES_NO_LABELS).map(([v, l]) => (
+                              <option key={v} value={v}>{l}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">도전성 코팅</span>
+                          <select
+                            value={imaging.coated}
+                            onChange={updateImaging("coated")}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          >
+                            <option value="">모름</option>
+                            {Object.entries(YES_NO_LABELS).map(([v, l]) => (
+                              <option key={v} value={v}>{l}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between">
+                        <p className="text-[11px] text-slate-400">
+                          입력한 항목만 보고서에 참고됩니다.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setImaging(EMPTY_IMAGING)}
+                          className="text-[11px] text-slate-500 underline"
+                        >
+                          모두 모름으로
+                        </button>
+                      </div>
+                    </details>
                   </div>
                 </div>
 

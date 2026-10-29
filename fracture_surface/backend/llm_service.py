@@ -16,6 +16,7 @@ import json
 import ollama
 from datetime import datetime
 
+import imaging_info
 from knowledge_cards import (
     format_cards_for_prompt,
     parse_used_cards,
@@ -402,9 +403,12 @@ cause_explanation에는 선택한 원인만 추정형으로 설명한다. 표면
 
 
 def append_integrated_context(prompt, gradcam_summary=None, probabilities=None,
-                              decision_path="", references_text=""):
+                              decision_path="", references_text="", imaging=None):
     """Supplement original v7 prompt with RAG and structured CNN metadata."""
     parts = []
+    imaging_text = imaging_info.prompt_text(imaging)
+    if imaging_text:
+        parts.append("SEM 촬영 정보 (사용자 입력, 관찰 해석에 참고):\n" + imaging_text)
     if probabilities:
         parts.append("클래스별 CNN 출력 정보 (예측 재분류 금지): " + str(probabilities)[:1200])
     if gradcam_summary:
@@ -597,10 +601,12 @@ def generate_llm_analysis(
     probabilities=None,
     decision_path: str = "",
     references_text: str = "",
+    imaging=None,
 ):
     prompt = build_prompt(prediction, confidence_percent, material)
     prompt = append_integrated_context(
-        prompt, gradcam_summary, probabilities, decision_path, references_text
+        prompt, gradcam_summary, probabilities, decision_path, references_text,
+        imaging=imaging_info.normalize(imaging),
     )
 
     parsed = None
@@ -1176,7 +1182,8 @@ def check_report_text(field, text, *, other_types=None,
 # =========================================================
 
 def build_report_prompt(prediction, confidence_percent, material,
-                        cam_text, feature, obs1, obs2, knowledge_text=""):
+                        cam_text, feature, obs1, obs2, knowledge_text="",
+                        imaging=None):
 
     if material in UNKNOWN_MATERIALS:
         material_block = (
@@ -1192,6 +1199,25 @@ def build_report_prompt(prediction, confidence_percent, material,
             "cause 필드에서 이 재질 성질을 이미지 관찰, Grad-CAM++ 결과와 "
             "연결해 설명한다. 재질 성질만으로 원인을 단정하지 않는다."
         )
+
+    imaging_text = imaging_info.prompt_text(imaging)
+    if imaging_text:
+        imaging_block = (
+            "\n[SEM 촬영 정보 (사용자 입력)]\n"
+            f"{imaging_text}\n"
+            "촬영 위치, 검출기, 세척·코팅 정보를 관찰 해석에 반영하고, "
+            "관련 내용은 [참고 지식 카드]를 근거로 쓴다.\n"
+        )
+    else:
+        imaging_block = ""
+
+    if imaging_info.has_scale(imaging):
+        scale_rule = (
+            "- 사용자가 입력한 배율·스케일 바로 관찰 규모(어느 정도 크기의 특징까지 볼 수 있는지)를 "
+            "설명할 수 있다. 다만 이미지에서 직접 잰 값이 아니므로 딤플 크기, 줄무늬 간격의 수치를 단정하지 않는다."
+        )
+    else:
+        scale_rule = "- 이미지에 배율 정보가 없으므로 딤플 크기, 줄무늬 간격 같은 절대 크기나 간격을 판단하지 않는다."
 
     knowledge_block = ""
     if knowledge_text:
@@ -1224,7 +1250,7 @@ def build_report_prompt(prediction, confidence_percent, material,
 
 [재질 정보]
 {material_block}
-{knowledge_block}
+{imaging_block}{knowledge_block}
 [작성 규칙]
 - 반드시 한국어로 작성한다.
 - 입력에 없는 특징, 사용 환경, 사고 상황을 만들어내지 않는다.
@@ -1232,7 +1258,7 @@ def build_report_prompt(prediction, confidence_percent, material,
 - 원인은 반드시 추정형("가능성이 있습니다", "추정할 수 있습니다")으로 쓴다.
 - "확실합니다", "분명합니다", "원인입니다", "틀림없습니다"를 쓰지 않는다.
 - 색상과 밝기를 특징으로 쓰지 않는다.
-- 이미지에 배율 정보가 없으므로 딤플 크기, 줄무늬 간격 같은 절대 크기나 간격을 판단하지 않는다.
+{scale_rule}
 
 [필드]
 - characteristics: "{prediction}"의 일반적인 특징과 이 이미지에서 관찰된 특징 (2~3문장)
@@ -1259,9 +1285,10 @@ JSON 이외의 문장은 출력하지 않는다.
 
 def generate_report(prediction, prediction_en, confidence_percent,
                     material="", probabilities=None, gradcam_summary=None,
-                    decision_path="", feature="", obs1="", obs2=""):
+                    decision_path="", feature="", obs1="", obs2="", imaging=None):
 
     no_material = material in UNKNOWN_MATERIALS
+    imaging = imaging_info.normalize(imaging)
     other_types = [n for n in FRACTURE_TYPES if n != prediction]
 
     if prediction_en not in KO_NAMES:
@@ -1277,6 +1304,7 @@ def generate_report(prediction, prediction_en, confidence_percent,
         obs_query=" ".join(x for x in (prediction, feature, obs1, obs2) if x),
         cam_query=cam_text,
         banned_words=MATERIAL_WORDS if no_material else (),
+        imaging=imaging,
     )
 
     print("[지식 카드] 선택:", ", ".join(c["id"] for c in cards) or "없음")
@@ -1285,6 +1313,7 @@ def generate_report(prediction, prediction_en, confidence_percent,
         prediction, confidence_percent, material,
         cam_text, feature, obs1, obs2,
         knowledge_text=format_cards_for_prompt(cards),
+        imaging=imaging,
     )
 
     parsed = None
@@ -1355,6 +1384,7 @@ def generate_report(prediction, prediction_en, confidence_percent,
             "모름 (보고서에 반영하지 않음)" if no_material
             else MATERIAL_LABELS.get(material, material)
         ),
+        "imaging_label": imaging_info.label(imaging),
         "knowledge_refs": public_cards(cards, used_cards),
         "llm_error": llm_error,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
