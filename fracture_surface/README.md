@@ -54,6 +54,9 @@ LLM(Ollama)을 이용하여 결과를 설명해주는 AI 웹 시스템입니다.
 fracture_surface/
 ├── backend/
 │   ├── main.py
+│   ├── llm_service.py        # 분석·비교·보고서 LLM
+│   ├── knowledge_cards.py    # 보고서용 지식 카드 선택
+│   ├── knowledge/            # 지식 카드 (jsonl)
 │   ├── fractography_cnn_best1.pth
 │   └── requirements.txt
 │
@@ -252,8 +255,18 @@ npm list react
 ### 모델 다운로드
 
 ```bash
-ollama pull llama3
+ollama pull gemma4:e2b   # 분석·보고서 작성 (llm_service.py 의 OLLAMA_MODEL)
+ollama pull bge-m3       # 문헌·지식 카드 검색용 임베딩
 ```
+
+`bge-m3` 가 없어도 보고서는 만들어지며, 이때 지식 카드는 검색 대신 파일 순서대로 선택됩니다.
+
+### 지식 카드 (보고서 근거)
+
+* `backend/knowledge/fractography_cards.jsonl`: ASM Handbook Vol.12와 리뷰 논문을 요약한 카드 (카드마다 출처 포함)
+* 보고서 생성 시 예측 유형·재질에 맞는 카드를 골라 LLM에 제공하고, 보고서 "참고 근거" 섹션에 표시합니다.
+* 카드 임베딩은 첫 보고서 생성 때 만들어져 `backend/knowledge/card_embeddings.*` 에 저장됩니다.
+  미리 만들려면 backend 폴더에서 `python knowledge_cards.py` 를 실행합니다.
 
 ---
 

@@ -1352,6 +1352,52 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
               </ol>
             </Section>
 
+            {report.knowledge_refs?.length > 0 && (
+              <Section no="7" title="참고 근거 (문헌 지식 카드)">
+                <p className="text-xs text-slate-500 leading-5">
+                  보고서 작성 시 AI에게 제공된 문헌 요약입니다.
+                  {report.knowledge_refs.some((k) => k.cited)
+                    ? " ‘인용’ 표시는 AI가 실제로 사용했다고 밝힌 카드입니다."
+                    : ""}
+                </p>
+                <ul className="mt-3 space-y-3">
+                  {report.knowledge_refs.map((k) => (
+                    <li
+                      key={k.id}
+                      className="rounded-lg border border-slate-200 bg-slate-50 p-3 break-inside-avoid"
+                    >
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="font-bold text-slate-700">{k.id}</span>
+                        <span className="text-slate-500">{k.section}</span>
+                        {k.cited && (
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-700">
+                            인용
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-700 leading-6 mt-1">{k.text}</p>
+                      {k.sources?.map((s, i) => (
+                        <p key={i} className="text-[11px] text-slate-500 leading-5 mt-1">
+                          {s.url ? (
+                            <a
+                              href={s.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline decoration-slate-300 underline-offset-2 hover:text-emerald-700"
+                            >
+                              {s.citation}
+                            </a>
+                          ) : (
+                            s.citation
+                          )}
+                        </p>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
             <p className="text-[11px] text-slate-400 leading-5 mt-8 border-t border-slate-200 pt-3">
               본 보고서는 이미지와 입력 정보를 기반으로 한 AI 추정 결과이며
               실제 파손 원인을 확정하는 자료가 아닙니다. 정확한 원인 규명을 위해서는

@@ -1,4 +1,9 @@
 """
+[비교용] fallback 제거 버전
+- 미리 정해 둔 대체 문장(fallback)을 모두 없앴다. LLM 이 낸 문장을 정리(clean_text)만 해서 그대로 쓴다.
+- 검증 규칙은 문장을 바꾸지 않고 "[검증 경고]" 로그만 남긴다.
+- LLM 호출이 실패하면 해당 필드는 빈 문자열이고, 응답에 llm_error 가 담긴다.
+
 LLM 서비스 모듈 (Gemma / Ollama)
 
 - generate_llm_analysis()     : 단일 이미지 멀티모달 분석 (/predict)
@@ -11,11 +16,21 @@ import json
 import ollama
 from datetime import datetime
 
+from knowledge_cards import (
+    format_cards_for_prompt,
+    parse_used_cards,
+    public_cards,
+    select_cards,
+)
+
 # =========================================================
 # Ollama 모델 설정
 # =========================================================
 
 OLLAMA_MODEL = "gemma4:e2b"
+
+# 분석·비교·보고서가 같은 값을 써야 Ollama 가 호출마다 모델을 다시 올리지 않는다.
+LLM_NUM_CTX = 8192
 
 # =========================================================
 # 공통 상수
@@ -47,22 +62,8 @@ MATERIAL_LABELS = {
 UNKNOWN_MATERIALS = ("", "unknown", None)
 
 # =========================================================
-# fallback용 기본 정보
+# 분석 프롬프트용 원인 후보
 # =========================================================
-
-FALLBACK_FEATURES = {
-    "취성 파괴": "표면의 균열 및 제한적인 변형 형태",
-    "연성 파괴": "표면의 함몰 및 소성 변형 형태",
-    "피로 파괴": "영역별 표면 차이 및 균열 성장 형태",
-    "입계 파괴": "입자형 또는 경계형 분리 구조",
-}
-
-EXPECTED_CAUSE = {
-    "취성 파괴": "급격한 응력 집중 가능성",
-    "연성 파괴": "국부적인 하중 집중 가능성",
-    "피로 파괴": "장기간 반복 하중 가능성",
-    "입계 파괴": "결정립 경계 약화 가능성",
-}
 
 # 유형별 허용 원인 후보
 CAUSE_CANDIDATES = {
@@ -90,50 +91,6 @@ CAUSE_CANDIDATES = {
     ],
 }
 
-# 메커니즘 fallback
-FALLBACK_MECHANISM = {
-    "취성 파괴": (
-        "이러한 표면 형태는 CNN이 예측한 취성 파괴에서 "
-        "제한적인 소성 변형과 함께 균열이 빠르게 진행되는 "
-        "메커니즘과 관련해 해석할 수 있습니다."
-    ),
-    "연성 파괴": (
-        "이러한 표면 형태는 CNN이 예측한 연성 파괴에서 "
-        "소성 변형이 동반되는 파손 메커니즘과 "
-        "관련해 해석할 수 있습니다."
-    ),
-    "피로 파괴": (
-        "이러한 표면의 영역별 차이는 CNN이 예측한 피로 파괴에서 "
-        "균열이 점진적으로 성장하는 메커니즘과 "
-        "관련해 해석할 수 있습니다."
-    ),
-    "입계 파괴": (
-        "이러한 표면 구조는 CNN이 예측한 입계 파괴에서 "
-        "결정립 경계를 따라 분리가 진행되는 메커니즘과 "
-        "관련해 해석할 수 있습니다."
-    ),
-}
-
-# 원인 설명 fallback (보고서 cause 필드)
-FALLBACK_CAUSE_EXPLANATION = {
-    "취성 파괴": (
-        "가능한 원인으로는 급격한 응력 집중이나 충격성 하중이 "
-        "파손에 영향을 주었을 가능성이 있습니다."
-    ),
-    "연성 파괴": (
-        "가능한 원인으로는 국부적인 하중 집중이나 과도한 변형이 "
-        "파손에 영향을 주었을 가능성이 있습니다."
-    ),
-    "피로 파괴": (
-        "가능한 원인으로는 장기간의 반복 하중이나 반복 응력이 "
-        "균열 성장에 영향을 주었을 가능성이 있습니다."
-    ),
-    "입계 파괴": (
-        "가능한 원인으로는 결정립 경계의 약화가 "
-        "파손에 영향을 주었을 가능성이 있습니다."
-    ),
-}
-
 # =========================================================
 # 보고서용 상수
 # =========================================================
@@ -148,13 +105,6 @@ MATERIAL_TRAITS = {
     "magnesium": "상온 성형성이 낮고 노치에 민감하며 부식과 피로에 상대적으로 취약한 편입니다.",
     "nickel_alloy": "고온 강도와 내식성이 우수하지만 고온 환경에서는 입계 석출물, 크리프와 관련된 입계 손상이 문제될 수 있습니다.",
     "tool_steel": "경도와 내마모성이 높은 대신 인성이 낮아 충격이나 응력 집중에 취성 파괴가 일어나기 쉽습니다.",
-}
-
-REPORT_TYPE_INFO = {
-    "취성 파괴": "거의 소성 변형 없이 균열이 빠르게 진행되어 결정면을 따라 쪼개지는 파괴이며, 평탄하고 반짝이는 분리면이 특징입니다.",
-    "연성 파괴": "큰 소성 변형 후 파단되는 파괴이며, 미세한 함몰(딤플) 패턴과 컵-콘 형태의 변형 흔적이 특징입니다.",
-    "피로 파괴": "반복 하중으로 균열이 서서히 성장하다 최종 파단되는 파괴이며, 비치 마크(줄무늬)와 구역별 표면 차이가 특징입니다.",
-    "입계 파괴": "결정립 경계를 따라 균열이 전파되는 파괴이며, 입자 경계가 드러난 표면이 특징입니다.",
 }
 
 NEXT_STEPS = {
@@ -230,6 +180,11 @@ def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def warn(field: str, reason: str) -> None:
+    """검증 규칙에 걸려도 문장을 바꾸지 않고 로그만 남긴다."""
+    print(f"[검증 경고] {field}: {reason}")
+
+
 def ensure_sentence_end(text: str) -> str:
     text = clean_text(text)
     if not text:
@@ -258,36 +213,6 @@ def parse_llm_json(text: str):
             pass
 
     return None
-
-
-def safe_visual_anchor(feature: str) -> str:
-    """LLM 관찰 표현을 확정적 물리 구조명 대신 중립적 형상명으로 낮춘다.
-
-    이미지 진위 판정은 불가능하므로 여기서 '검증 완료'라고 간주하지 않는다.
-    """
-    feature = clean_text(feature).strip().rstrip('.!?。')
-    if not feature or len(feature) > 85:
-        return ''
-    if re.search(r'CNN|예측|원인|응력|하중|파괴|메커니즘|측정|입증', feature):
-        return ''
-    return feature.strip() if len(feature.strip()) >= 4 else ''
-
-
-def conservative_cause_explanation(prediction: str, expected_cause: str) -> str:
-    """선택 후보를 어색한 조사 중복 없이 보수적으로 표현한다."""
-    candidate = clean_text(expected_cause).rstrip('.!?。 ')
-
-    if candidate not in CAUSE_CANDIDATES[prediction]:
-        candidate = EXPECTED_CAUSE[prediction]
-
-    if candidate.endswith('가능성'):
-        candidate = candidate[:-len('가능성')].strip()
-
-    if '영향을 주었을' in candidate or '관여했을' in candidate:
-        return ensure_sentence_end(f'가능한 원인으로 {candidate} 가능성이 있으나, 이미지만으로 확정할 수 없습니다')
-
-    # '국부적인 하중 집중 등이'와 같이 명사형 원인을 사용한다.
-    return ensure_sentence_end(f'가능한 원인으로 {candidate} 등이 고려될 수 있으나, 이미지만으로 확정할 수 없습니다')
 
 
 # =========================================================
@@ -492,16 +417,16 @@ def append_integrated_context(prompt, gradcam_summary=None, probabilities=None,
 
 
 # =========================================================
-# 단일 분석 응답 검증
-# (모든 validate_* 함수는 빈 입력이면 해당 fallback 을 반환한다)
+# 단일 분석 응답 검증 (경고만, 문장 대체 없음)
 # =========================================================
 
 def validate_feature(prediction: str, feature: str) -> str:
-    """형상 서술만 보존. 시각적 진위는 정규식으로 판별할 수 없다."""
+    """해석절만 잘라내고, 규칙에 걸려도 대체하지 않는다."""
     feature = clean_text(feature).strip().rstrip('.!?。')
 
     if not feature:
-        return FALLBACK_FEATURES[prediction]
+        warn("feature", "빈 응답")
+        return ""
 
     feature = re.sub(r'^(?:이미지에서|이미지에는|파단면에서|파단면에는)\s*', '', feature)
 
@@ -509,12 +434,15 @@ def validate_feature(prediction: str, feature: str) -> str:
     feature = re.split(r'[,，]?\s*(?:이는|이러한 구조는|이러한 특징은)\s*(?=.{0,100}(?:파괴|메커니즘|응력|하중|관련))', feature, maxsplit=1)[0]
 
     if re.search(r'CNN|예측|응력|하중|원인|메커니즘|파괴|\d+\s*(?:mm|μm|cm)', feature):
-        return FALLBACK_FEATURES[prediction]
+        warn("feature", "원인·유형·수치 표현 포함")
 
     if re.search(r'붉은색|푸른색|빨간색|파란색|색상|밝기', feature):
-        return FALLBACK_FEATURES[prediction]
+        warn("feature", "색상·밝기 표현 포함")
 
-    return feature if len(feature) >= 4 else FALLBACK_FEATURES[prediction]
+    if len(feature) < 4:
+        warn("feature", "너무 짧음")
+
+    return feature
 
 
 def validate_visual_observation(text: str) -> str:
@@ -552,23 +480,18 @@ def validate_visual_observation(text: str) -> str:
     return ' '.join(results)
 
 
-def validate_mechanism_relation(prediction: str, text: str, feature: str = '') -> str:
-    """원인·과도한 단정을 제외하고 관찰 특징과 일반적 메커니즘을 연결한다."""
+def validate_mechanism_relation(prediction: str, text: str) -> str:
     text = clean_text(text)
-    anchor = safe_visual_anchor(feature)
 
-    mechanism = {
-        '취성 파괴': '제한적인 소성 변형과 균열 진행',
-        '연성 파괴': '소성 변형을 동반하는 파단 과정',
-        '피로 파괴': '균열이 점진적으로 성장하는 과정',
-        '입계 파괴': '결정립 경계를 따른 분리 과정',
-    }[prediction]
+    if not text:
+        warn("mechanism_relation", "빈 응답")
+        return ""
 
-    if not text or any(name != prediction and name in text for name in FRACTURE_TYPES):
-        text = ''
+    if any(name != prediction and name in text for name in FRACTURE_TYPES):
+        warn("mechanism_relation", "다른 파손 유형명 포함")
 
     if re.search(r'확실|입증|증명|측정|반드시|응력 집중|하중 집중|반복(?:적인)? 하중|경계 약화|취약화|유발|가속화|촉진', text):
-        text = ''
+        warn("mechanism_relation", "단정 또는 원인 추정 표현 포함")
 
     terms = {
         '연성 파괴': ('소성 변형', '공극', '변형을 동반'),
@@ -576,25 +499,21 @@ def validate_mechanism_relation(prediction: str, text: str, feature: str = '') -
         '피로 파괴': ('균열 성장', '균열 전파', '점진적'),
         '입계 파괴': ('경계를 따라', '경계를 따른', '경계 분리', '입계 분리', '분리 과정'),
     }
+    if not any(term in text for term in terms[prediction]):
+        warn("mechanism_relation", "예측 유형의 메커니즘 용어 없음")
 
-    if text and any(term in text for term in terms[prediction]):
-        return ensure_sentence_end(text)
-
-    if anchor:
-        return (f'이미지에서 묘사된 \\"{anchor}\\" 형태는 CNN의 {prediction} 예측에서 일반적으로 논의되는 '
-                f'{mechanism}과 관련지어 해석할 수 있으나, 이 형상만으로 해당 과정을 확인할 수는 없습니다.')
-
-    return FALLBACK_MECHANISM[prediction]
+    return ensure_sentence_end(text)
 
 
 def validate_expected_cause(prediction: str, cause: str) -> str:
     cause = clean_text(cause)
-    if not cause:
-        return EXPECTED_CAUSE[prediction]
 
-    for name in FRACTURE_TYPES:
-        cause = cause.replace(name, "")
-    cause = re.sub(r"\s+", " ", cause).strip()
+    if not cause:
+        warn("expected_cause", "빈 응답")
+        return ""
+
+    if cause.rstrip('.!?。 ') not in CAUSE_CANDIDATES[prediction]:
+        warn("expected_cause", "허용 후보 목록에 없는 문구")
 
     invalid_keywords = {
         "연성 파괴": ["반복 하중", "반복적인 하중", "반복 응력", "반복적인 응력", "피로", "결정립 경계"],
@@ -604,29 +523,20 @@ def validate_expected_cause(prediction: str, cause: str) -> str:
     }
     for word in invalid_keywords.get(prediction, []):
         if word in cause:
-            print(f"[cause validate] 부적절 원인 감지: {word}")
-            return EXPECTED_CAUSE[prediction]
-
-    candidate_keywords = {
-        "취성 파괴": ["응력 집중", "충격"],
-        "연성 파괴": ["하중 집중", "과도한 하중", "변형 집중", "과도한 변형"],
-        "피로 파괴": ["반복 하중", "반복 응력", "균열 성장", "균열 전파"],
-        "입계 파괴": ["결정립 경계", "입계", "취약화", "약화"],
-    }
-    if not any(word in cause for word in candidate_keywords[prediction]):
-        print("[cause validate] 허용 원인 범위와 불일치 → fallback")
-        return EXPECTED_CAUSE[prediction]
+            warn("expected_cause", f"부적절 원인 키워드: {word}")
 
     return cause
 
 
-def validate_cause_explanation(prediction: str, text: str, expected_cause: str = "") -> str:
-    """추정형이더라도 특정 시각 구조의 형성/파괴를 직접 원인에 귀속하면 대체."""
+def validate_cause_explanation(prediction: str, text: str) -> str:
     text = clean_text(text)
-    fallback = conservative_cause_explanation(prediction, expected_cause)
 
-    if not text or any(name != prediction and name in text for name in FRACTURE_TYPES):
-        return fallback
+    if not text:
+        warn("cause_explanation", "빈 응답")
+        return ""
+
+    if any(name != prediction and name in text for name in FRACTURE_TYPES):
+        warn("cause_explanation", "다른 파손 유형명 포함")
 
     invalid_keywords = {
         '연성 파괴': ('반복 하중', '반복적인 하중', '반복 응력', '결정립 경계'),
@@ -635,52 +545,23 @@ def validate_cause_explanation(prediction: str, text: str, expected_cause: str =
         '입계 파괴': ('반복 하중', '반복적인 하중', '반복 응력', '큰 소성 변형'),
     }
     if any(word in text for word in invalid_keywords[prediction]):
-        return fallback
+        warn("cause_explanation", "예측 유형과 맞지 않는 원인 키워드")
 
     surface = r'(?:구조|형태|무늬|균열|네트워크|틈새|분포|파편|공극|함몰|간격|층상)'
     cause = r'(?:응력|하중|충격|경계 약화|취약화)'
 
-    # 표면 형상이 물리적 하중을 일으켰다는 역인과
-    if re.search(surface + r'.{0,65}' + cause + r'.{0,25}(?:유발|발생시켰|만들었)', text):
-        return fallback
-
-    # 관찰 구조가 특정 하중 때문에 생겼거나 파괴됐다는 과도한 인과 귀속
-    if re.search(surface + r'.{0,75}' + cause + r'.{0,30}(?:발생|형성|파괴|유발|생겨|만들)', text):
-        return fallback
-    if re.search(cause + r'.{0,70}' + surface + r'.{0,35}(?:발생|형성|파괴|유발|생겨|만들)', text):
-        return fallback
+    if (re.search(surface + r'.{0,65}' + cause + r'.{0,25}(?:유발|발생시켰|만들었)', text)
+            or re.search(surface + r'.{0,75}' + cause + r'.{0,30}(?:발생|형성|파괴|유발|생겨|만들)', text)
+            or re.search(cause + r'.{0,70}' + surface + r'.{0,35}(?:발생|형성|파괴|유발|생겨|만들)', text)):
+        warn("cause_explanation", "표면 구조와 원인 사이의 과도한 인과 귀속")
 
     if not re.search(r'가능성|추정|고려될 수|해석될 수|영향을 미쳤을 수|작용했을 수', text):
-        return fallback
+        warn("cause_explanation", "추정형 표현 없음")
 
     if re.search(r'확실|분명|입증|증명|측정|원인입니다', text):
-        return fallback
+        warn("cause_explanation", "단정 표현 포함")
 
-    return ensure_sentence_end(
-        text.replace('가능성이 매우 높습니다', '가능성이 있습니다')
-            .replace('가능성이 높습니다', '가능성이 있습니다')
-    )
-
-
-def build_visual_sentences(prediction: str, feature: str, observation_1: str, observation_2: str):
-    """관찰 문장 두 개 확보. 비어 있으면 feature 기반 문장/기본 문장으로 채운다."""
-    observation_1 = validate_visual_observation(observation_1)
-    observation_2 = validate_visual_observation(observation_2)
-
-    if not observation_1:
-        # feature가 완성 문장이면 그대로 사용해 '이미지에는 ... 형태가' 오류를 방지한다.
-        feature = clean_text(feature).strip()
-        if re.search(r"(?:습니다|입니다|됩니다|보입니다|있습니다)[.!?。]?$", feature):
-            observation_1 = ensure_sentence_end(feature)
-        elif feature:
-            observation_1 = ensure_sentence_end(f"주요 표면 특징으로 {feature}가 관찰됩니다")
-        else:
-            observation_1 = "현재 이미지에서 구체적인 표면 특징을 확인하기 어렵습니다."
-
-    if not observation_2 or observation_1 == observation_2:
-        observation_2 = "추가적인 위치·분포 차이는 이미지에서 명확하게 확인하기 어렵습니다."
-
-    return ensure_sentence_end(observation_1), ensure_sentence_end(observation_2)
+    return ensure_sentence_end(text)
 
 
 def compose_explanation(prediction: str, confidence_percent: float,
@@ -723,6 +604,7 @@ def generate_llm_analysis(
     )
 
     parsed = None
+    llm_error = ""
 
     try:
         user_message = {"role": "user", "content": prompt}
@@ -756,7 +638,7 @@ def generate_llm_analysis(
             options={
                 "temperature": 0.25,
                 "top_p": 0.9,
-                "num_ctx": 8192,
+                "num_ctx": LLM_NUM_CTX,
                 "num_predict": 1024,
             },
         )
@@ -768,39 +650,26 @@ def generate_llm_analysis(
 
         parsed = parse_llm_json(raw_response)
         if not parsed:
-            print("JSON 파싱 실패 → fallback 사용")
+            llm_error = "JSON 파싱 실패"
+            print("JSON 파싱 실패")
 
     except Exception as e:
-        print(f"Gemma / Ollama 오류: {e}")
+        llm_error = f"Gemma / Ollama 오류: {e}"
+        print(llm_error)
 
-    # LLM 응답이 없거나 실패해도 같은 검증 경로를 거친다.
-    # 각 validate_* 가 빈 값에 대해 유형별 fallback 을 돌려준다.
-    llm_ok = bool(parsed)
     parsed = parsed or {}
 
     image_feature = validate_feature(prediction, parsed.get("feature", ""))
-
-    observation_1, observation_2 = build_visual_sentences(
-        prediction,
-        image_feature,
-        parsed.get("visual_observation_1", ""),
-        parsed.get("visual_observation_2", ""),
-    )
-
-    # LLM 이 실패했을 때는 fallback feature 를 근거로 문장을 만들지 않고
-    # 기본 메커니즘 문장을 그대로 사용한다.
+    observation_1 = validate_visual_observation(parsed.get("visual_observation_1", ""))
+    observation_2 = validate_visual_observation(parsed.get("visual_observation_2", ""))
     mechanism_relation = validate_mechanism_relation(
-        prediction,
-        parsed.get("mechanism_relation", ""),
-        image_feature if llm_ok else "",
+        prediction, parsed.get("mechanism_relation", "")
     )
-
     llm_expected_cause = validate_expected_cause(
         prediction, parsed.get("expected_cause", "")
     )
-
     cause_explanation = validate_cause_explanation(
-        prediction, parsed.get("cause_explanation", ""), llm_expected_cause
+        prediction, parsed.get("cause_explanation", "")
     )
 
     korean_explanation = compose_explanation(
@@ -828,6 +697,7 @@ def generate_llm_analysis(
         "expected_cause": llm_expected_cause,
         "cause_explanation": cause_explanation,
         "explanation": korean_explanation,
+        "llm_error": llm_error,
     }
 
 
@@ -1169,23 +1039,8 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
 }}
 """
 
-    fallback_result = {
-        "summary":
-            "두 분석 결과는 이미지에서 관찰된 표면 형태와 분포를 중심으로 비교할 수 있습니다.",
-        "common_point":
-            "두 결과 모두 이미지에서 관찰된 표면 특징을 바탕으로 CNN 결과를 해석하고 있습니다.",
-        "visual_difference":
-            "두 이미지의 세부적인 표면 구조와 분포를 함께 비교할 필요가 있습니다.",
-        "mechanism_difference":
-            "각 이미지에서 관찰된 특징과 CNN 파손 메커니즘의 관계를 비교할 수 있습니다.",
-        "cause_difference":
-            "예상 원인은 이미지 분석을 바탕으로 제시된 가능성이므로 참고 정보로 해석하는 것이 좋습니다.",
-        "confidence_difference":
-            confidence_text,
-        "final_opinion":
-            "두 결과의 관찰 특징과 CNN 분석을 함께 비교하여 해석하는 것이 좋으며, "
-            "이미지만으로 실제 파손 원인을 확정하기는 어렵습니다.",
-    }
+    empty_result = {key: "" for key in COMPARE_TEXT_FIELDS}
+    empty_result["confidence_difference"] = confidence_text
 
     try:
         response = ollama.chat(
@@ -1207,7 +1062,7 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
                 },
                 {"role": "user", "content": prompt},
             ],
-            options={"temperature": 0.2, "top_p": 0.9},
+            options={"temperature": 0.2, "top_p": 0.9, "num_ctx": LLM_NUM_CTX},
         )
 
         raw_response = response["message"]["content"].strip()
@@ -1215,19 +1070,18 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
 
         parsed = parse_llm_json(raw_response)
         if not parsed:
-            return fallback_result
+            print("비교 JSON 파싱 실패")
+            return dict(empty_result, llm_error="JSON 파싱 실패")
 
-        result = {
-            key: clean_text(parsed.get(key, "")) or fallback_result[key]
-            for key in COMPARE_TEXT_FIELDS
-        }
+        result = {key: clean_text(parsed.get(key, "")) for key in COMPARE_TEXT_FIELDS}
         # 신뢰도는 LLM이 생성하지 않고 Python에서 계산한 문장을 그대로 사용
         result["confidence_difference"] = confidence_text
+        result["llm_error"] = ""
         return result
 
     except Exception as e:
         print(f"Gemma 비교 분석 오류: {e}")
-        return fallback_result
+        return dict(empty_result, llm_error=f"Gemma 비교 분석 오류: {e}")
 
 
 # =========================================================
@@ -1291,46 +1145,28 @@ def build_confidence_comment(confidence_percent):
     )
 
 
-def fallback_basis(prediction, prediction_en, gradcam_summary):
-    info = (gradcam_summary or {}).get(prediction_en)
-
-    if not info:
-        return (
-            f"Grad-CAM++에서 뚜렷한 활성화 영역이 확인되지 않아 "
-            f"모델의 전체 출력 확률을 기준으로 {prediction}로 분류되었습니다."
-        )
-
-    return (
-        f"Grad-CAM++ 분석에서 {prediction}에 해당하는 활성화 영역이 "
-        f"{info['position']}에 {info['spread']} 형태로 나타났으며, "
-        f"모델은 이 영역을 판단 근거로 활용한 것으로 해석할 수 있습니다."
-    )
-
-
-def check_report_text(text, fallback, *, other_types=None,
+def check_report_text(field, text, *, other_types=None,
                       need_uncertain=False, no_material=False):
+    """규칙에 걸려도 문장을 바꾸지 않고 경고만 남긴다."""
     text = clean_text(text)
 
     if not text:
-        return fallback
+        warn(field, "빈 응답")
+        return ""
 
     if any(w in text for w in FORBIDDEN_DEFINITIVE):
-        print("[report validate] 단정 표현 → fallback")
-        return fallback
+        warn(field, "단정 표현")
 
     if other_types and any(o in text for o in other_types):
-        print("[report validate] 다른 유형명 → fallback")
-        return fallback
+        warn(field, "다른 유형명")
 
     if no_material and any(w in text for w in MATERIAL_WORDS):
-        print("[report validate] 재질 미선택인데 재질 언급 → fallback")
-        return fallback
+        warn(field, "재질 미선택인데 재질 언급")
 
     if need_uncertain and not any(
         w in text for w in ["가능성", "추정", "수 있습니다", "보입니다"]
     ):
-        print("[report validate] 추정형 아님 → fallback")
-        return fallback
+        warn(field, "추정형 아님")
 
     return ensure_sentence_end(text)
 
@@ -1340,7 +1176,7 @@ def check_report_text(text, fallback, *, other_types=None,
 # =========================================================
 
 def build_report_prompt(prediction, confidence_percent, material,
-                        cam_text, feature, obs1, obs2):
+                        cam_text, feature, obs1, obs2, knowledge_text=""):
 
     if material in UNKNOWN_MATERIALS:
         material_block = (
@@ -1355,6 +1191,19 @@ def build_report_prompt(prediction, confidence_percent, material,
             f"재질의 일반적 성질(참고): {MATERIAL_TRAITS.get(material, '')}\n"
             "cause 필드에서 이 재질 성질을 이미지 관찰, Grad-CAM++ 결과와 "
             "연결해 설명한다. 재질 성질만으로 원인을 단정하지 않는다."
+        )
+
+    knowledge_block = ""
+    if knowledge_text:
+        knowledge_block = (
+            "\n[참고 지식 카드]\n"
+            "아래 카드는 문헌(ASM Handbook, 리뷰 논문 등)을 요약한 일반 지식이며 "
+            "이 이미지에서 관찰된 사실이 아니다.\n"
+            "- 카드 내용을 이 이미지에서 '관찰되었다'고 쓰지 않는다. "
+            "관찰은 [이전 이미지 분석 결과]에서만 가져온다.\n"
+            "- 카드는 특징의 일반적 의미, 판단 근거의 해석, 원인 후보, 확인 사항을 "
+            "설명할 때만 근거로 쓴다.\n"
+            f"{knowledge_text}\n"
         )
 
     return f"""
@@ -1375,7 +1224,7 @@ def build_report_prompt(prediction, confidence_percent, material,
 
 [재질 정보]
 {material_block}
-
+{knowledge_block}
 [작성 규칙]
 - 반드시 한국어로 작성한다.
 - 입력에 없는 특징, 사용 환경, 사고 상황을 만들어내지 않는다.
@@ -1383,12 +1232,14 @@ def build_report_prompt(prediction, confidence_percent, material,
 - 원인은 반드시 추정형("가능성이 있습니다", "추정할 수 있습니다")으로 쓴다.
 - "확실합니다", "분명합니다", "원인입니다", "틀림없습니다"를 쓰지 않는다.
 - 색상과 밝기를 특징으로 쓰지 않는다.
+- 이미지에 배율 정보가 없으므로 딤플 크기, 줄무늬 간격 같은 절대 크기나 간격을 판단하지 않는다.
 
 [필드]
 - characteristics: "{prediction}"의 일반적인 특징과 이 이미지에서 관찰된 특징 (2~3문장)
 - basis: Grad-CAM++ 영역(위치, 분포, 겹침)과 확률을 근거로 이렇게 분류된 이유 (2~4문장). 확률 수치를 나열하지 않는다.
 - cause: 추정되는 파손 원인 (3~4문장). 앞선 특징과 근거를 연결한다.
 - next_steps_note: 정확한 원인 분석을 위해 아래 확인 사항이 필요한 이유 (1문장)
+- used_cards: 위 필드를 쓰는 데 실제로 사용한 지식 카드 ID 목록 (사용하지 않았으면 빈 목록)
 
 JSON 이외의 문장은 출력하지 않는다.
 
@@ -1396,7 +1247,8 @@ JSON 이외의 문장은 출력하지 않는다.
     "characteristics": "...",
     "basis": "...",
     "cause": "...",
-    "next_steps_note": "..."
+    "next_steps_note": "...",
+    "used_cards": ["카드 ID", "..."]
 }}
 """
 
@@ -1412,20 +1264,31 @@ def generate_report(prediction, prediction_en, confidence_percent,
     no_material = material in UNKNOWN_MATERIALS
     other_types = [n for n in FRACTURE_TYPES if n != prediction]
 
-    fb_characteristics = REPORT_TYPE_INFO[prediction]
-    fb_basis = fallback_basis(prediction, prediction_en, gradcam_summary)
-    fb_cause = FALLBACK_CAUSE_EXPLANATION[prediction]
-    if not no_material and material in MATERIAL_TRAITS:
-        fb_cause += " 재질 특성도 해석 시 참고할 수 있습니다."
-    fb_note = "이미지만으로는 원인을 확정할 수 없어 아래 항목을 추가로 확인하는 것이 필요합니다."
+    if prediction_en not in KO_NAMES:
+        prediction_en = next(
+            (en for en, ko in KO_NAMES.items() if ko == prediction), prediction_en
+        )
 
     cam_text = build_cam_text(gradcam_summary, probabilities, decision_path)
+
+    cards = select_cards(
+        prediction_en,
+        material,
+        obs_query=" ".join(x for x in (prediction, feature, obs1, obs2) if x),
+        cam_query=cam_text,
+        banned_words=MATERIAL_WORDS if no_material else (),
+    )
+
+    print("[지식 카드] 선택:", ", ".join(c["id"] for c in cards) or "없음")
+
     prompt = build_report_prompt(
         prediction, confidence_percent, material,
         cam_text, feature, obs1, obs2,
+        knowledge_text=format_cards_for_prompt(cards),
     )
 
     parsed = None
+    llm_error = ""
     try:
         response = ollama.chat(
             model=OLLAMA_MODEL,
@@ -1440,7 +1303,8 @@ def generate_report(prediction, prediction_en, confidence_percent,
                 },
                 {"role": "user", "content": prompt},
             ],
-            options={"temperature": 0.25, "top_p": 0.9},
+            format="json",
+            options={"temperature": 0.25, "top_p": 0.9, "num_ctx": LLM_NUM_CTX},
         )
 
         raw = response["message"]["content"].strip()
@@ -1448,31 +1312,33 @@ def generate_report(prediction, prediction_en, confidence_percent,
 
         parsed = parse_llm_json(raw)
         if not parsed:
-            print("보고서 JSON 파싱 실패 → fallback")
+            llm_error = "보고서 JSON 파싱 실패"
+            print(llm_error)
 
     except Exception as e:
-        print(f"보고서 Gemma 오류: {e}")
+        llm_error = f"보고서 Gemma 오류: {e}"
+        print(llm_error)
 
-    # check_report_text 는 빈 값이면 fallback 을 돌려주므로
-    # LLM 실패 시에도 같은 경로로 처리한다.
     parsed = parsed or {}
 
     characteristics = check_report_text(
-        parsed.get("characteristics", ""), fb_characteristics,
+        "characteristics", parsed.get("characteristics", ""),
         other_types=other_types, no_material=no_material,
     )
     basis = check_report_text(
-        parsed.get("basis", ""), fb_basis, no_material=no_material,
+        "basis", parsed.get("basis", ""), no_material=no_material,
     )
     cause = check_report_text(
-        parsed.get("cause", ""), fb_cause,
+        "cause", parsed.get("cause", ""),
         other_types=other_types, need_uncertain=True,
         no_material=no_material,
     )
     note = check_report_text(
-        parsed.get("next_steps_note", ""), fb_note,
+        "next_steps_note", parsed.get("next_steps_note", ""),
         no_material=no_material,
     )
+
+    used_cards = parse_used_cards(parsed.get("used_cards", []), cards)
 
     return {
         "characteristics": characteristics,
@@ -1489,5 +1355,7 @@ def generate_report(prediction, prediction_en, confidence_percent,
             "모름 (보고서에 반영하지 않음)" if no_material
             else MATERIAL_LABELS.get(material, material)
         ),
+        "knowledge_refs": public_cards(cards, used_cards),
+        "llm_error": llm_error,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
