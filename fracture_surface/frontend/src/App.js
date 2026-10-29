@@ -16,6 +16,10 @@ import {
   saveReport,
   fetchReport,
   fetchReportIds,
+  deleteHistoryItems,
+  isDbStoreEnabled,
+  setDbStoreEnabled,
+  subscribeDbStore,
 } from "./firebase";
 
 import {
@@ -24,6 +28,7 @@ import {
   fetchPhaseHistory,
   renamePhaseHistoryItem,
   clearAllPhaseHistory,
+  deletePhaseHistoryItems,
 } from "./firebasePhase";
 
 const CLASS_COLORS = {
@@ -1150,6 +1155,90 @@ function GradcamView({
   );
 }
 
+// ==========================================
+// DB 저장 On/Off 토글 (상단 바)
+// ==========================================
+
+function DbStoreToggle({ enabled, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      onClick={() => onChange(!enabled)}
+      title={
+        enabled
+          ? "분석 기록을 데이터베이스(Firebase)에 저장하고 불러옵니다."
+          : "데이터베이스를 사용하지 않습니다. 기록은 이 화면에만 임시로 남습니다."
+      }
+      className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/15 transition"
+    >
+      <span className="whitespace-nowrap">DB 저장</span>
+      <span
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
+          enabled ? "bg-emerald-500" : "bg-slate-500"
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+            enabled ? "translate-x-[18px]" : "translate-x-0.5"
+          }`}
+        />
+      </span>
+      <span className={`w-6 text-left ${enabled ? "text-emerald-300" : "text-slate-400"}`}>
+        {enabled ? "ON" : "OFF"}
+      </span>
+    </button>
+  );
+}
+
+// ==========================================
+// 기록 선택 삭제 도구 막대 (사이드바)
+// ==========================================
+
+function DeleteToolbar({ selectedCount, totalCount, deleting, onToggleAll, onCancel, onDelete }) {
+  const allSelected = totalCount > 0 && selectedCount === totalCount;
+
+  return (
+    <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-red-700 leading-5">
+          삭제할 기록을 선택하세요.
+          <span className="ml-1 font-semibold">({selectedCount}개 선택)</span>
+        </p>
+
+        <button
+          type="button"
+          onClick={onToggleAll}
+          className="shrink-0 text-xs text-red-600 hover:text-red-800 font-semibold"
+        >
+          {allSelected ? "선택 해제" : "전체 선택"}
+        </button>
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={deleting}
+          className="rounded-lg border border-slate-300 bg-white py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+        >
+          취소
+        </button>
+
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={selectedCount === 0 || deleting}
+          className="rounded-lg bg-red-600 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed transition"
+        >
+          {deleting ? "삭제 중..." : `선택 삭제 (${selectedCount})`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ModalShell({
   title,
   subtitle,
@@ -1550,8 +1639,18 @@ export default function App() {
   const [reportSave, setReportSave] = useState(null);        // {status, at?, message?}
   const [reportIds, setReportIds] = useState(() => new Set()); // 보고서가 있는 기록 docId
 
+  // DB 저장 On/Off (firebase.js 의 스위치와 동기화)
+  const [dbEnabled, setDbEnabled] = useState(() => isDbStoreEnabled());
+  useEffect(() => subscribeDbStore(setDbEnabled), []);
+
+  // 기록 선택 삭제 모드 (현재 탭의 기록 목록에 적용)
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [deleteIds, setDeleteIds] = useState([]);   // 선택한 기록의 id
+  const [deleting, setDeleting] = useState(false);
+
   // 기록 목록이 바뀌면 어떤 기록에 보고서가 있는지 다시 조회 (목록 '보고서' 배지)
   useEffect(() => {
+    if (!dbEnabled) return; // DB 를 끈 동안은 기존 배지 유지
     let alive = true;
     fetchReportIds(history.map((h) => h.docId))
       .then((ids) => {
@@ -1561,7 +1660,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [history]);
+  }, [history, dbEnabled]);
 
   const [activeTab, setActiveTab] = useState("fracture");
 
@@ -1707,42 +1806,35 @@ if (data.status !== "success") {
 
 setPhaseResult(data);
 
-// 저장용 가벼운 기록 생성 후 Firestore 저장
-try {
-  const item = await buildPhaseHistoryItem({
-    title: `Phase 분석 ${phaseHistory.length + 1}`,
-    originalDataUrl: phasePreviewUrl,
-    data,
-  });
-  await addPhaseHistoryItem(item);
-  setPhaseHistory(await fetchPhaseHistory());
-} catch (err) {
-  console.error("Phase 기록 저장 실패:", err);
-  // 분석 결과는 이미 화면에 표시됐으므로 저장 실패만 알림
-  alert("분석은 완료됐지만 기록 저장에 실패했습니다.");
+if (isDbStoreEnabled()) {
+  // DB ON: 저장용 가벼운 기록 생성 후 Firestore 저장 → 목록 다시 불러오기
+  try {
+    const item = await buildPhaseHistoryItem({
+      title: `Phase 분석 ${phaseHistory.length + 1}`,
+      originalDataUrl: phasePreviewUrl,
+      data,
+    });
+    await addPhaseHistoryItem(item);
+    setPhaseHistory(await fetchPhaseHistory());
+  } catch (err) {
+    console.error("Phase 기록 저장 실패:", err);
+    // 분석 결과는 이미 화면에 표시됐으므로 저장 실패만 알림
+    alert("분석은 완료됐지만 기록 저장에 실패했습니다.");
+  }
+} else {
+  // DB OFF: 화면 목록에만 임시로 추가 (docId 없음)
+  setPhaseHistory((prev) => [
+    {
+      id: Date.now(),
+      title: `Phase 분석 ${phaseHistory.length + 1}`,
+      time: new Date().toLocaleString("ko-KR"),
+      image: phasePreviewUrl,
+      result: data,
+      docId: null,
+    },
+    ...prev,
+  ]);
 }
-
-      // 분석 결과 저장
-      setPhaseResult(data);
-
-      // Phase 분석 기록 추가
-      const newPhaseHistory = {
-        id: Date.now(),
-
-        // 자동 제목
-        title: `Phase 분석 ${phaseHistory.length + 1}`,
-
-        time: new Date().toLocaleString("ko-KR"),
-
-        image: phasePreviewUrl,
-
-        result: data,
-      };
-
-      setPhaseHistory((prev) => [
-        newPhaseHistory,
-        ...prev,
-      ]);
 
       console.log(
         "Phase 분석 성공:",
@@ -2055,6 +2147,13 @@ useEffect(() => {
     result: historyResult,
   };
 
+  // DB OFF: 화면 목록에만 임시로 추가 (docId 없음)
+  if (!isDbStoreEnabled()) {
+    setHistoryDocId(null);
+    setHistory((prev) => [{ ...newItem, docId: null }, ...prev]);
+    return null;
+  }
+
   try {
     const docId = await addHistoryItem(newItem);
     setHistoryDocId(docId);
@@ -2155,6 +2254,136 @@ const clearHistory = async () => {
   setSelectedCompareIds([]);
   setShowCompareModal(false);
   setCompareSummary(null);
+};
+
+// ==========================================
+// 기록 선택 삭제
+// ==========================================
+
+const exitDeleteMode = () => {
+  setDeleteMode(false);
+  setDeleteIds([]);
+};
+
+// 탭을 바꾸면 선택 삭제 모드 해제
+useEffect(() => {
+  setDeleteMode(false);
+  setDeleteIds([]);
+}, [activeTab]);
+
+const toggleDeleteSelect = (id) => {
+  setDeleteIds((prev) =>
+    prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]
+  );
+};
+
+const toggleDeleteSelectAll = () => {
+  const list = activeTab === "fracture" ? history : phaseHistory;
+  setDeleteIds((prev) =>
+    prev.length === list.length ? [] : list.map((item) => item.id)
+  );
+};
+
+const reloadHistoryFromDb = async () => {
+  try {
+    setHistory(await fetchHistory());
+  } catch (err) {
+    console.error("Firestore 기록 불러오기 실패:", err);
+  }
+  try {
+    setPhaseHistory(await fetchPhaseHistory());
+  } catch (err) {
+    console.error("Phase 기록 불러오기 실패:", err);
+  }
+};
+
+const handleDeleteSelected = async () => {
+  const isFracture = activeTab === "fracture";
+  const list = isFracture ? history : phaseHistory;
+  const targets = list.filter((item) => deleteIds.includes(item.id));
+  if (targets.length === 0) return;
+
+  const dbOn = isDbStoreEnabled();
+  const docIds = targets.map((item) => item.docId).filter(Boolean);
+
+  const message =
+    `선택한 기록 ${targets.length}개를 삭제할까요?\n` +
+    (dbOn
+      ? "데이터베이스에서도 삭제되며 되돌릴 수 없습니다."
+      : docIds.length > 0
+        ? "DB 저장이 꺼져 있어 화면 목록에서만 지워집니다. (DB를 다시 켜면 다시 나타납니다)"
+        : "화면 목록에서 지워집니다.");
+
+  if (!window.confirm(message)) return;
+
+  setDeleting(true);
+
+  try {
+    if (dbOn && docIds.length > 0) {
+      if (isFracture) await deleteHistoryItems(docIds);
+      else await deletePhaseHistoryItems(docIds);
+    }
+  } catch (err) {
+    console.error("기록 선택 삭제 실패:", err);
+    alert("기록 삭제 중 오류가 발생했습니다. 콘솔을 확인해주세요.");
+    await reloadHistoryFromDb(); // 일부만 지워졌을 수 있으므로 DB 기준으로 다시 표시
+    setDeleting(false);
+    return;
+  }
+
+  const removed = new Set(targets.map((item) => item.id));
+
+  if (isFracture) {
+    setHistory((prev) => prev.filter((item) => !removed.has(item.id)));
+    setSelectedCompareIds((prev) => prev.filter((id) => !removed.has(id)));
+    setReportIds((prev) => {
+      const next = new Set(prev);
+      docIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    if (historyDocId && docIds.includes(historyDocId)) {
+      // 지금 보고 있는 결과의 기록이 지워짐 → 보고서 연결 해제
+      setHistoryDocId(null);
+      setReportSave(null);
+    }
+    setCompareSummary(null);
+  } else {
+    setPhaseHistory((prev) => prev.filter((item) => !removed.has(item.id)));
+  }
+
+  setDeleting(false);
+  exitDeleteMode();
+};
+
+// ==========================================
+// DB 저장 On/Off
+// ==========================================
+
+const handleDbToggle = async (next) => {
+  if (next) {
+    const hasLocalOnly =
+      history.some((item) => !item.docId) ||
+      phaseHistory.some((item) => !item.docId);
+
+    if (
+      hasLocalOnly &&
+      !window.confirm(
+        "DB 저장을 켜면 데이터베이스의 기록을 다시 불러옵니다.\n" +
+          "DB를 끈 동안 분석한 기록은 저장되지 않았으므로 목록에서 사라집니다. 계속할까요?"
+      )
+    ) {
+      return;
+    }
+
+    setDbStoreEnabled(true);
+    exitDeleteMode();
+    setSelectedCompareIds([]);
+    setCompareSummary(null);
+    await reloadHistoryFromDb();
+  } else {
+    // 끌 때는 지금 보이는 목록을 그대로 두고, 이후 분석은 화면에만 기록
+    setDbStoreEnabled(false);
+  }
 };
 
   const handleUpload =
@@ -2274,6 +2503,10 @@ const clearHistory = async () => {
 
   // 생성된 보고서를 현재 분석 기록에 연결해 Firestore 에 저장
   const persistReport = async (data, targetResult) => {
+    if (!isDbStoreEnabled()) {
+      setReportSave(null); // DB OFF: 보고서는 화면에만 표시
+      return;
+    }
     try {
       setReportSave({ status: "saving" });
 
@@ -2518,18 +2751,44 @@ const clearHistory = async () => {
                   </h2>
                 </div>
 
-                {history.length > 0 && (
-                  <button
-                    onClick={clearHistory}
-                    className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
-                  >
-                    전체 삭제
-                  </button>
+                {history.length > 0 && !deleteMode && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setDeleteMode(true)}
+                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+                    >
+                      선택 삭제
+                    </button>
+                    <button
+                      onClick={clearHistory}
+                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+                    >
+                      전체 삭제
+                    </button>
+                  </div>
                 )}
               </div>
 
+              {!dbEnabled && (
+                <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700 leading-5">
+                  DB 저장이 꺼져 있습니다. 새 분석 기록은 이 화면에만 임시로 남습니다.
+                </p>
+              )}
+
+              {/* 선택 삭제 */}
+              {deleteMode && (
+                <DeleteToolbar
+                  selectedCount={deleteIds.length}
+                  totalCount={history.length}
+                  deleting={deleting}
+                  onToggleAll={toggleDeleteSelectAll}
+                  onCancel={exitDeleteMode}
+                  onDelete={handleDeleteSelected}
+                />
+              )}
+
               {/* 비교 */}
-              {history.length > 0 && (
+              {history.length > 0 && !deleteMode && (
                 <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200">
                   <p className="text-xs text-slate-500 leading-5">
                     결과 2개를 선택하면 비교할 수 있습니다.
@@ -2566,29 +2825,52 @@ const clearHistory = async () => {
                   const checked =
                     selectedCompareIds.includes(item.id);
 
+                  const deleteChecked =
+                    deleteMode && deleteIds.includes(item.id);
+
                   return (
                     <div
                       key={item.id}
                       onClick={() =>
-                        handleHistoryClick(item)
+                        deleteMode
+                          ? toggleDeleteSelect(item.id)
+                          : handleHistoryClick(item)
                       }
                       className={`relative w-full text-left p-3 rounded-xl border transition cursor-pointer ${
-                        checked
-                          ? "bg-blue-50 border-blue-400"
-                          : "bg-white hover:border-slate-400 hover:bg-slate-50 border-slate-200"
+                        deleteChecked
+                          ? "bg-red-50 border-red-400"
+                          : checked && !deleteMode
+                            ? "bg-blue-50 border-blue-400"
+                            : "bg-white hover:border-slate-400 hover:bg-slate-50 border-slate-200"
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onClick={(e) =>
-                          e.stopPropagation()
-                        }
-                        onChange={() =>
-                          toggleCompareSelect(item.id)
-                        }
-                        className="absolute top-3 right-3 w-4 h-4 accent-slate-900 cursor-pointer"
-                      />
+                      {deleteMode ? (
+                        <input
+                          type="checkbox"
+                          checked={deleteChecked}
+                          onClick={(e) =>
+                            e.stopPropagation()
+                          }
+                          onChange={() =>
+                            toggleDeleteSelect(item.id)
+                          }
+                          aria-label="삭제할 기록 선택"
+                          className="absolute top-3 right-3 w-4 h-4 accent-red-600 cursor-pointer"
+                        />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onClick={(e) =>
+                            e.stopPropagation()
+                          }
+                          onChange={() =>
+                            toggleCompareSelect(item.id)
+                          }
+                          aria-label="비교할 기록 선택"
+                          className="absolute top-3 right-3 w-4 h-4 accent-slate-900 cursor-pointer"
+                        />
+                      )}
 
                       <div className="flex gap-3 pr-6">
                         <div className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0">
@@ -2621,6 +2903,11 @@ const clearHistory = async () => {
 
                           <p className="text-[11px] text-slate-400 mt-1">
                             {item.time}
+                            {!item.docId && (
+                              <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                임시
+                              </span>
+                            )}
                             {reportIds.has(item.docId) && (
                               <p>
                               <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
@@ -2654,18 +2941,43 @@ const clearHistory = async () => {
                   </h2>
                 </div>
 
-                {phaseHistory.length > 0 && (
-                  <button
-  onClick={async () => {
-    try { await clearAllPhaseHistory(); } catch (e) { console.error(e); }
-    setPhaseHistory([]);
-  }}
-  className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
->
-  전체 삭제
-</button>
+                {phaseHistory.length > 0 && !deleteMode && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setDeleteMode(true)}
+                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+                    >
+                      선택 삭제
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try { await clearAllPhaseHistory(); } catch (e) { console.error(e); }
+                        setPhaseHistory([]);
+                      }}
+                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+                    >
+                      전체 삭제
+                    </button>
+                  </div>
                 )}
               </div>
+
+              {!dbEnabled && (
+                <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700 leading-5">
+                  DB 저장이 꺼져 있습니다. 새 분석 기록은 이 화면에만 임시로 남습니다.
+                </p>
+              )}
+
+              {deleteMode && (
+                <DeleteToolbar
+                  selectedCount={deleteIds.length}
+                  totalCount={phaseHistory.length}
+                  deleting={deleting}
+                  onToggleAll={toggleDeleteSelectAll}
+                  onCancel={exitDeleteMode}
+                  onDelete={handleDeleteSelected}
+                />
+              )}
 
               <div className="space-y-2">
 
@@ -2692,16 +3004,36 @@ const clearHistory = async () => {
                 {/* Phase 분석 기록 */}
                 {phaseHistory.map((item) => {
 
+                const deleteChecked =
+                  deleteMode && deleteIds.includes(item.id);
+
                 return (
                     <div
                       key={item.id}
                       onClick={() =>
-                        handlePhaseHistoryClick(item)
+                        deleteMode
+                          ? toggleDeleteSelect(item.id)
+                          : handlePhaseHistoryClick(item)
                       }
-                      className="w-full p-3 rounded-xl border border-slate-200 bg-white hover:border-emerald-400 hover:bg-emerald-50/30 transition cursor-pointer"
+                      className={`relative w-full p-3 rounded-xl border transition cursor-pointer ${
+                        deleteChecked
+                          ? "bg-red-50 border-red-400"
+                          : "border-slate-200 bg-white hover:border-emerald-400 hover:bg-emerald-50/30"
+                      }`}
                     >
 
-                      <div className="flex gap-3">
+                      {deleteMode && (
+                        <input
+                          type="checkbox"
+                          checked={deleteChecked}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleDeleteSelect(item.id)}
+                          aria-label="삭제할 기록 선택"
+                          className="absolute top-3 right-3 w-4 h-4 accent-red-600 cursor-pointer"
+                        />
+                      )}
+
+                      <div className={`flex gap-3 ${deleteMode ? "pr-6" : ""}`}>
 
                         {/* 원본 이미지 */}
                         <div className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0">
@@ -2729,6 +3061,7 @@ const clearHistory = async () => {
                               {item.title || "Phase 분석"}
                             </p>
 
+                            {!deleteMode && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -2744,11 +3077,17 @@ const clearHistory = async () => {
                             >
                               수정
                             </button>
+                            )}
 
                           </div>
 
                           <p className="text-[11px] text-slate-400 mt-1">
                             {item.time}
+                            {!item.docId && (
+                              <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                임시
+                              </span>
+                            )}
                           </p>
 
                         </div>
@@ -2814,7 +3153,10 @@ const clearHistory = async () => {
               </button>
             </div>
 
-            <div />
+            {/* DB 저장 On/Off */}
+            <div className="flex justify-end">
+              <DbStoreToggle enabled={dbEnabled} onChange={handleDbToggle} />
+            </div>
           </div>
         </header>
 

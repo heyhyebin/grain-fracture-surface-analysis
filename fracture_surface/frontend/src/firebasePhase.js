@@ -9,7 +9,7 @@ import {
   query,
   limit,
 } from "firebase/firestore";
-import { db } from "./firebase"; // 기존 프로젝트의 db 재사용
+import { db, isDbStoreEnabled } from "./firebase"; // 기존 프로젝트의 db 재사용 + DB On/Off 스위치 공유
 
 const PHASE_COLLECTION = "phaseHistory";
 const MAX_HISTORY = 20;
@@ -68,12 +68,14 @@ export async function buildPhaseHistoryItem({ title, originalDataUrl, data }) {
 }
 
 export async function addPhaseHistoryItem(item) {
+  if (!isDbStoreEnabled()) return null;
   const ref = await addDoc(collection(db, PHASE_COLLECTION), item);
   await trimOldHistory(); // 20개 초과분 삭제
   return ref.id;
 }
 
 export async function fetchPhaseHistory() {
+  if (!isDbStoreEnabled()) return [];
   const q = query(
     collection(db, PHASE_COLLECTION),
     orderBy("id", "desc"),
@@ -84,14 +86,24 @@ export async function fetchPhaseHistory() {
 }
 
 export async function renamePhaseHistoryItem(docId, title) {
+  if (!isDbStoreEnabled()) return;
   await updateDoc(doc(db, PHASE_COLLECTION, docId), { title });
 }
 
 export async function clearAllPhaseHistory() {
+  if (!isDbStoreEnabled()) return;
   const snap = await getDocs(collection(db, PHASE_COLLECTION));
   await Promise.all(
     snap.docs.map((d) => deleteDoc(doc(db, PHASE_COLLECTION, d.id)))
   );
+}
+
+// 선택한 Phase 기록만 삭제
+export async function deletePhaseHistoryItems(docIds) {
+  if (!isDbStoreEnabled()) return 0;
+  const ids = (docIds || []).filter(Boolean);
+  await Promise.all(ids.map((id) => deleteDoc(doc(db, PHASE_COLLECTION, id))));
+  return ids.length;
 }
 
 // 오래된 기록 정리

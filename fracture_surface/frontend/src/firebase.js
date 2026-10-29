@@ -24,8 +24,49 @@ import {
 // ==========================================
 // true  → Firestore 실제로 읽기/쓰기 수행
 // false → 네트워크 호출 없이 즉시 반환 (로컬 개발용, 빠름)
+//
+// 웹 화면 상단의 토글로 바꿀 수 있고, 선택한 값은 브라우저(localStorage)에 기억된다.
+// DB_STORE_DEFAULT 는 처음 접속했을 때(저장된 값이 없을 때)의 기본값이다.
 
-const DB_STORE = true;
+const DB_STORE_DEFAULT = true;
+const DB_STORE_KEY = "fracture.dbStore";
+
+function readStoredDbStore() {
+  try {
+    const saved = window.localStorage.getItem(DB_STORE_KEY);
+    if (saved === null) return DB_STORE_DEFAULT;
+    return saved === "true";
+  } catch {
+    return DB_STORE_DEFAULT; // 시크릿 모드 등 localStorage 를 못 쓰는 환경
+  }
+}
+
+let DB_STORE = readStoredDbStore();
+
+const dbStoreListeners = new Set();
+
+/** 현재 DB 저장 On/Off 상태 */
+export function isDbStoreEnabled() {
+  return DB_STORE;
+}
+
+/** DB 저장 On/Off 변경 (웹 토글에서 호출) */
+export function setDbStoreEnabled(enabled) {
+  DB_STORE = Boolean(enabled);
+  try {
+    window.localStorage.setItem(DB_STORE_KEY, String(DB_STORE));
+  } catch {
+    // 저장 못 해도 이번 세션 동안은 적용된다
+  }
+  console.log(`[DB_STORE] ${DB_STORE ? "ON" : "OFF"}`);
+  dbStoreListeners.forEach((listener) => listener(DB_STORE));
+}
+
+/** On/Off 변경 구독. 반환값을 호출하면 구독 해제 */
+export function subscribeDbStore(listener) {
+  dbStoreListeners.add(listener);
+  return () => dbStoreListeners.delete(listener);
+}
 
 
 // ==========================================
@@ -202,6 +243,43 @@ export async function clearAllHistory() {
 
   } catch (error) {
     console.error("Firestore 기록 삭제 실패:", error);
+    throw error;
+  }
+}
+
+
+// ==========================================
+// 6-1. 선택한 분석 기록만 삭제
+// ==========================================
+
+/**
+ * 선택한 분석 기록 삭제. 연결된 보고서(analysisReports/{docId})도 함께 지운다.
+ * @param {string[]} docIds  analysisHistory 문서 ID 목록
+ * @returns {number} 삭제한 기록 수 (DB_STORE=false 이면 0)
+ */
+export async function deleteHistoryItems(docIds) {
+
+  if (!DB_STORE) {
+    console.log("[DB_STORE=false] 선택 삭제 건너뜀");
+    return 0;
+  }
+
+  const ids = (docIds || []).filter(Boolean);
+  if (ids.length === 0) return 0;
+
+  try {
+    await Promise.all(
+      ids.flatMap((id) => [
+        deleteDoc(doc(db, HISTORY_COLLECTION, id)),
+        deleteDoc(doc(db, REPORT_COLLECTION, id)), // 보고서가 없어도 오류 없음
+      ])
+    );
+
+    console.log("Firestore 선택 기록 삭제 완료:", ids.length);
+    return ids.length;
+
+  } catch (error) {
+    console.error("Firestore 선택 기록 삭제 실패:", error);
     throw error;
   }
 }
