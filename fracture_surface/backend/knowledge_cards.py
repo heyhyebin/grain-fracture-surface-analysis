@@ -23,6 +23,7 @@
 import hashlib
 import json
 import os
+import re
 from typing import Dict, Iterable, List, Optional
 
 import numpy as np
@@ -47,19 +48,25 @@ RELATED_TYPES = {
     "DIF-002": ("Fatigue",),
     "DIF-004": ("Cleavage", "Intergranular"),
     "MG-002": ("Fatigue",),
+    # 피로 파면 관찰 배율·정량 분해능 카드: 다른 유형 보고서에 들어가면 '균열 전선 분석' 같은 엉뚱한 문장이 나온다.
+    "MAG-001": ("Fatigue",),
+    "MAG-004": ("Fatigue",),
 }
+
+# 스케일 바/배율을 입력했을 때는 빼는 카드 ("배율 정보가 없으면 크기를 비교하지 않는다" 류)
+NO_SCALE_ONLY = {"SEM-003"}
 
 # 보고서 대상 시편과 직접 관계없는 카드 (선행 연구 정확도, 조직 차원의 예방 절차)
 EXCLUDED_FROM_REPORT = {"GEN-006", "PRV-001"}
 
 # (slot, 사용할 section, 최대 장수, 검색 질의 종류)
+# 카드가 많을수록 작은 LLM 은 어떤 카드도 제대로 반영하지 못한다 → 슬롯을 줄였다 (최대 약 12장).
 SLOTS = (
     ("feature", ("feature",), 2, "obs"),
     ("differential", ("differential",), 1, "obs"),
-    ("model_basis", ("model_basis",), 2, "cam"),
+    ("model_basis", ("model_basis",), 1, "cam"),
     ("cause", ("cause", "mechanism"), 2, "obs"),
     ("caution", ("caution",), 1, "obs"),
-    ("next_step", ("next_step",), 1, "obs"),
 )
 
 # 재질을 입력했을 때 재질 전용 카드를 추가로 넣는 장수
@@ -81,14 +88,19 @@ IMAGING_PINS = {
     ("cleaned", "yes"): ("CLN-001",),
     ("coated", "yes"): ("COAT-001",),
     ("coated", "no"): ("SEM-005",),
-    ("scale", True): ("MAG-001", "MAG-004", "STR-001", "SCL-001", "IMG-001", "MAG-003",
-                      "SEM-003", "FAT-014", "DUC-011"),
+    # 유형 전용 크기 카드를 앞에 둔다 (예전 순서에서는 Ductile 에도 MAG-001·004 가 먼저 들어갔다).
+    ("scale", True): ("DUC-011", "SCL-001", "DUC-012", "STR-001", "FAT-014", "IMG-001",
+                      "MAG-003", "MAG-001", "MAG-004"),
 }
 
 # 입력 항목별 최대 장수와 전체 최대 장수 (프롬프트 길이 제한).
 # 위치와 배율을 함께 입력해도 한쪽이 다른 쪽 카드를 모두 밀어내지 않도록 항목별로 나눈다.
 IMAGING_KEY_LIMITS = {"location": 3, "scale": 2, "detector": 2, "cleaned": 1, "coated": 1}
-IMAGING_SLOT_SIZE = 6
+IMAGING_SLOT_SIZE = 5
+
+# 사전 배경 정보(환경·하중·온도·처리 이력) 때문에 우선 넣는 카드 최대 장수.
+# 어떤 카드를 넣을지는 report_rules.BACKGROUND_CARDS 가 정한다.
+BACKGROUND_SLOT_SIZE = 3
 
 SECTION_LABELS = {
     "feature": "특징",
@@ -252,6 +264,9 @@ def _eligible(card: Dict, prediction_en: str, material: str,
     if (card.get("requires_scale") and not allow_scale) or card.get("sem_observable") is False:
         return False
 
+    if allow_scale and card["id"] in NO_SCALE_ONLY:
+        return False
+
     if any(w in card["text"] for w in banned_words):
         return False
 
@@ -269,7 +284,8 @@ def _imaging_pin_groups(imaging: Optional[Dict]) -> List[tuple]:
 
 def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
                  cam_query: str = "", banned_words: Iterable[str] = (),
-                 imaging: Optional[Dict] = None) -> List[Dict]:
+                 imaging: Optional[Dict] = None,
+                 background_cards: Optional[List[str]] = None) -> List[Dict]:
     """
     보고서 항목별로 카드를 고른다. 반환: 카드 dict 목록 (각 카드에 "slot" 추가).
     imaging: imaging_info.normalize() 결과. 입력된 촬영 정보에 맞는 카드를 먼저 넣고,
@@ -311,12 +327,28 @@ def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
             chosen.append(i)
             slots[i] = slot
 
+    # 배경 정보 카드: 예측 유형·조건별로 report_rules 가 고른 카드. 유형·재질 필터는 건너뛰고
+    # (재질 전용 카드도 '다른 재질 사례'로 쓰인다) 제외 목록·금지어·스케일 조건만 확인한다.
+    id_to_any = {c["id"]: i for i, c in enumerate(store.cards)}
+    for cid in (background_cards or [])[:BACKGROUND_SLOT_SIZE]:
+        i = id_to_any.get(cid)
+        if i is None or i in slots:
+            continue
+        card = store.cards[i]
+        if (cid in EXCLUDED_FROM_REPORT or card.get("sem_observable") is False
+                or (card.get("requires_scale") and not allow_scale)
+                or any(w in card["text"] for w in banned_words)):
+            continue
+        chosen.append(i)
+        slots[i] = "background"
+
     # 촬영 정보 카드: 입력 항목마다 IMAGING_KEY_LIMITS 장까지, 전체 IMAGING_SLOT_SIZE 장까지
     id_to_idx = {store.cards[i]["id"]: i for i in eligible}
     for key, cids in _imaging_pin_groups(imaging):
         taken = 0
         for cid in cids:
-            if taken >= IMAGING_KEY_LIMITS.get(key, 1) or len(chosen) >= IMAGING_SLOT_SIZE:
+            n_imaging = sum(1 for v in slots.values() if v == "imaging")
+            if taken >= IMAGING_KEY_LIMITS.get(key, 1) or n_imaging >= IMAGING_SLOT_SIZE:
                 break
             i = id_to_idx.get(cid)
             if i is not None and i not in slots:
@@ -340,10 +372,51 @@ def select_cards(prediction_en: str, material: str = "", obs_query: str = "",
 # =========================================================
 
 def format_cards_for_prompt(cards: List[Dict]) -> str:
-    return "\n".join(
-        f"[{c['id']}] ({SECTION_LABELS.get(c['section'], c['section'])}) {c['text']}"
-        for c in cards
-    )
+    """배경·촬영 정보 때문에 들어간 카드는 [우선] 으로 표시해 LLM 이 먼저 반영하게 한다."""
+    lines = []
+    priority = ("background", "imaging")
+    for c in sorted(cards, key=lambda c: c.get("slot") not in priority):
+        tag = " [우선]" if c.get("slot") in priority else ""
+        lines.append(f"[{c['id']}]{tag} ({SECTION_LABELS.get(c['section'], c['section'])}) {c['text']}")
+    return "\n".join(lines)
+
+
+# 카드 본문에서 인용 확인용 핵심어를 뽑을 때 버리는 말
+_STOP = {"있다", "있으며", "없다", "수", "때", "것", "등", "및", "또는", "그", "이", "한", "더", "같은",
+         "경우", "따라", "위해", "통해", "대한", "보다", "모두", "함께", "주로", "보통", "일반적으로",
+         # 어느 보고서에나 나오는 말은 인용 근거가 되지 않는다
+         "영역", "특징", "파괴", "파면", "가능성", "관찰", "이미지", "형태", "나타난다", "나타날", "보인다",
+         "딤플", "크기", "작은", "미세", "연성", "취성", "균열", "하중"}
+_PARTICLE = re.compile(r"(으로|에서|에는|에도|까지|부터|이며|하며|이고|하고|은|는|이|가|을|를|에|의|로|와|과|도|만)$")
+
+
+def _card_terms(text: str) -> set:
+    terms = set()
+    for word in re.findall(r"[가-힣A-Za-z]{2,}", text):
+        word = _PARTICLE.sub("", word)
+        if len(word) >= 2 and word not in _STOP:
+            terms.add(word)
+    return terms
+
+
+def verify_used_cards(used_ids: List[str], cards: List[Dict], report_text: str,
+                      min_overlap: int = 2) -> List[str]:
+    """
+    LLM 이 '사용했다'고 적은 카드 중, 카드 핵심어가 보고서 본문에 실제로 2개 이상 나온 카드만 남긴다.
+    (작은 모델은 제공된 카드를 거의 전부 사용했다고 적는 경향이 있다.)
+    """
+    by_id = {c["id"]: c for c in cards}
+    kept = []
+    for cid in used_ids:
+        card = by_id.get(cid)
+        if not card:
+            continue
+        hits = [t for t in _card_terms(card["text"]) if t in report_text]
+        if len(hits) >= min_overlap:
+            kept.append(cid)
+        else:
+            print(f"[지식 카드] {cid} 인용 표시 제거 — 본문에 카드 내용이 드러나지 않음 (일치 {hits})")
+    return kept
 
 
 def parse_used_cards(value, cards: List[Dict]) -> List[str]:

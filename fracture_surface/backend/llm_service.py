@@ -6,30 +6,101 @@
 
 LLM 서비스 모듈 (Gemma / Ollama)
 
+[프롬프트 개편]
+- 분석 호출은 '관찰 전용'에 가깝게 줄였다. RAG 문헌은 기본으로 넣지 않는다 (USE_RAG_IN_ANALYSIS).
+- 촬영 위치·스케일·재질·2위 확률은 report_rules.py 가 먼저 판단해 [필수 반영 사항]과 원인 후보로 넣는다.
+- 스케일 바가 있으면 수치 단정은 막고 '스케일 바 대비 상대 크기' 서술은 요구한다.
+- 모든 호출은 _chat() 으로: think=False, JSON 스키마, 토큰 수 로그.
+- 보고서 used_cards 는 본문에 카드 내용이 실제로 드러난 경우만 '인용'으로 남긴다.
+
 - generate_llm_analysis()     : 단일 이미지 멀티모달 분석 (/predict)
 - generate_compare_analysis() : 두 분석 결과 비교
 - generate_report()           : 파손단면 AI 분석 보고서 (/report)
 """
 
+import os
 import re
 import json
 import ollama
 from datetime import datetime
 
+import background_info
 import imaging_info
+import report_rules
 from knowledge_cards import (
     format_cards_for_prompt,
     parse_used_cards,
     public_cards,
     select_cards,
+    verify_used_cards,
 )
 
 # =========================================================
 # Ollama 모델 설정
 # =========================================================
 
-OLLAMA_MODEL = "gemma4:12b"
-LLM_NUM_CTX = 8192
+# 환경변수로 바꿀 수 있다. 예) PowerShell: $env:OLLAMA_MODEL = "gemma4:e4b"
+# 원격(Colab 등) Ollama 를 쓰려면 $env:OLLAMA_HOST = "https://....trycloudflare.com"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:12b")
+
+# 분석·비교·보고서가 같은 값을 써야 Ollama 가 호출마다 모델을 다시 올리지 않는다.
+LLM_NUM_CTX = int(os.getenv("LLM_NUM_CTX", "8192"))
+
+# 분석(관찰) 호출에 RAG 문헌 청크를 넣을지. 기본 끔:
+# 클래스 이름만으로 검색해 매번 같은 영어 청크가 들어가고, 이미지 관찰 지시를 묻어 버린다.
+# 문헌 근거는 보고서 단계의 지식 카드(같은 문헌의 한국어 요약)로 대신한다.
+USE_RAG_IN_ANALYSIS = os.getenv("USE_RAG_IN_ANALYSIS", "0") == "1"
+
+
+def _chat(**kwargs):
+    """
+    ollama.chat 공통 래퍼.
+    - think=False: gemma4·qwen3.5 의 사고 모드가 출력 토큰을 다 써서 JSON 이 비는 것을 막는다.
+      (구버전 ollama 패키지가 think 인자를 모르면 빼고 다시 호출)
+    - 입력/출력 토큰 수를 로그로 남겨 num_ctx 초과 여부를 확인할 수 있게 한다.
+    """
+    kwargs.setdefault("model", OLLAMA_MODEL)
+    try:
+        response = ollama.chat(think=False, **kwargs)
+    except TypeError:
+        response = ollama.chat(**kwargs)
+
+    prompt_tokens = response.get("prompt_eval_count")
+    print(
+        f"[LLM] {kwargs['model']} 입력 {prompt_tokens} / num_ctx {LLM_NUM_CTX} 토큰, "
+        f"출력 {response.get('eval_count')} 토큰, 종료 사유 {response.get('done_reason')}"
+    )
+    if prompt_tokens and prompt_tokens >= LLM_NUM_CTX * 0.95:
+        print("[LLM 경고] 입력이 num_ctx 에 거의 닿았습니다. 앞부분이 잘렸을 수 있으니 LLM_NUM_CTX 를 늘리세요.")
+    return response
+
+
+# 구조화 출력(JSON 스키마) — 필드 누락·엉뚱한 키를 줄인다.
+ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "feature": {"type": "string"},
+        "visual_observation_1": {"type": "string"},
+        "visual_observation_2": {"type": "string"},
+        "mechanism_relation": {"type": "string"},
+        "expected_cause": {"type": "string"},
+        "cause_explanation": {"type": "string"},
+    },
+    "required": ["feature", "visual_observation_1", "visual_observation_2",
+                 "mechanism_relation", "expected_cause", "cause_explanation"],
+}
+
+REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "characteristics": {"type": "string"},
+        "basis": {"type": "string"},
+        "cause": {"type": "string"},
+        "next_steps_note": {"type": "string"},
+        "used_cards": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["characteristics", "basis", "cause", "next_steps_note", "used_cards"],
+}
 
 # =========================================================
 # 공통 상수
@@ -54,6 +125,7 @@ MATERIAL_LABELS = {
     "magnesium": "마그네슘 합금",
     "nickel_alloy": "니켈 합금",
     "tool_steel": "공구강",
+    "hea": "고엔트로피 합금 (HEA)",
     "unknown": "정보 없음",
     "": "미선택",
 }
@@ -64,30 +136,10 @@ UNKNOWN_MATERIALS = ("", "unknown", None)
 # 분석 프롬프트용 원인 후보
 # =========================================================
 
-# 유형별 허용 원인 후보
+# 유형별 기본 원인 후보. 실제 프롬프트에는 report_rules.build_context() 가
+# 촬영 위치·재질에 맞춰 순서를 바꾼 후보가 들어간다.
 CAUSE_CANDIDATES = {
-    "취성 파괴": [
-        "급격한 응력 집중 가능성",
-        "충격성 하중의 영향 가능성",
-        "국부적인 응력 집중에 따른 빠른 균열 진행 가능성",
-    ],
-    "연성 파괴": [
-        "국부적인 하중 집중 가능성",
-        "과도한 하중에 따른 변형 가능성",
-        "국부적인 변형 집중 가능성",
-        "과도한 변형이 파손에 영향을 주었을 가능성",
-    ],
-    "피로 파괴": [
-        "장기간 반복 하중 가능성",
-        "반복 응력에 따른 균열 성장 가능성",
-        "국부적인 반복 응력이 균열 성장에 관여했을 가능성",
-        "반복적인 하중에 따른 점진적 균열 전파 가능성",
-    ],
-    "입계 파괴": [
-        "결정립 경계 약화 가능성",
-        "결정립 경계 부근의 취약화 가능성",
-        "입계 영역의 약화가 파손에 영향을 주었을 가능성",
-    ],
+    KO_NAMES[en]: causes for en, causes in report_rules.BASE_CAUSES.items()
 }
 
 # =========================================================
@@ -104,6 +156,7 @@ MATERIAL_TRAITS = {
     "magnesium": "상온 성형성이 낮고 노치에 민감하며 부식과 피로에 상대적으로 취약한 편입니다.",
     "nickel_alloy": "고온 강도와 내식성이 우수하지만 고온 환경에서는 입계 석출물, 크리프와 관련된 입계 손상이 문제될 수 있습니다.",
     "tool_steel": "경도와 내마모성이 높은 대신 인성이 낮아 충격이나 응력 집중에 취성 파괴가 일어나기 쉽습니다.",
+    "hea": "FeMnNiCrCo(Cantor) 같은 단상 FCC 고엔트로피 합금은 저온에서도 연성과 인성을 유지하는 편이지만, 수소 충전 시 쌍정·입계를 따라 균열이 생기는 수소 취화가 보고됩니다.",
 }
 
 NEXT_STEPS = {
@@ -137,7 +190,7 @@ FORBIDDEN_DEFINITIVE = ["확실합니다", "분명합니다", "원인입니다",
 
 MATERIAL_WORDS = [
     "재질", "스테인리스", "알루미늄", "티타늄", "주철",
-    "구리", "마그네슘", "니켈", "공구강", "강재", "탄소강",
+    "구리", "마그네슘", "니켈", "공구강", "강재", "탄소강", "고엔트로피",
 ]
 
 
@@ -310,112 +363,82 @@ def build_cam_text(gradcam_summary, probabilities, decision_path):
 # 단일 분석 Prompt
 # =========================================================
 
-def build_prompt(prediction: str, confidence_percent: float, material: str) -> str:
-    """관찰을 우선하고, 해석·원인을 뒤에 분리하는 간결한 단일 호출 프롬프트."""
-    condition = build_condition_text(material)
-    confidence_note = get_confidence_instruction(confidence_percent)
-    causes = "\n".join(f"- {item}" for item in CAUSE_CANDIDATES[prediction])
-
-    return f"""너는 금속 파단면을 관찰하고 CNN 분석 결과를 설명하는 멀티모달 도우미다.
-
-첫 이미지는 원본, 두 번째 이미지가 있다면 동일 이미지의 Grad-CAM++ 강조 시각화다.
-
-Grad-CAM++은 CNN의 예측에 영향을 준 위치를 시각화할 뿐, 실제 응력·하중·균열 시작점을 측정하지 않는다.
+MECHANISM_HINT = {
+    "연성 파괴": "소성 변형과 미세 공극의 생성·성장·합체",
+    "취성 파괴": "소성 변형이 적은 상태에서 결정면을 따라 분리",
+    "피로 파괴": "반복 하중에 따른 점진적 균열 성장 (관찰만으로 반복 하중을 확인했다고 쓰지 않는다)",
+    "입계 파괴": "결정립 경계를 따른 분리",
+}
 
 
-
-[1단계: 순수 시각 관찰 — 가장 먼저 수행]
-
-원본에서 눈에 보이는 형상(선형 무늬, 함몰, 판상 면, 경계, 거칠기)을 확인한다.
-
-두 번째 이미지가 있다면 강조 위치와 그곳의 형상을 확인한다.
-
-위치·분포·방향은 실제로 보일 때만 기술한다. 스케일 없는 절대 크기, 시간 경과, 균열 진행 방향은 추측하지 않는다.
-
-금속 조각·섬유 구조·파편 등은 표면 형상의 시각적 묘사로 사용할 수 있으나, 실제 분리된 조각이나 재료 구조를 확인한 것으로 단정하지 않는다.
-
-표면 무늬를 곧바로 파괴 원인이나 진행 과정으로 해석하지 않는다.
-
-feature는 15~40자 정도의 짧은 명사구로 작성하고 원인·파손 유형·재질을 넣지 않는다.
-
-visual_observation_1은 실제 보이는 대표 형상을, visual_observation_2는 관찰 가능한 위치·분포·방향을 기술한다.
-
-관찰에 자신이 없으면 세부 형태를 만들어내지 말고 확실히 보이는 수준만 설명한다.
-JSON 값이 없으면 실제 빈 문자열(\"\")을 사용하고, 빈 문자열이라는 단어를 출력하지 않는다.
-
-
-
-[2단계: CNN 결과와 연결 — 관찰을 완료한 뒤 수행]
-
-CNN 최종 예측: {prediction} (예측 확률 {confidence_percent:.1f}%). 예측 유형을 바꾸거나 재분류하지 않는다.
-
-mechanism_relation에서는 관찰한 구체적 구조를 CNN의 {prediction} 예측과 연결한다.
-
-연성 파괴: 소성 변형·미세 공극의 형성 및 결합.
-
-취성 파괴: 제한적 소성 변형·균열을 따른 분리.
-
-피로 파괴: 반복 하중과 연관될 수 있는 점진적 균열 성장 메커니즘. 단, 관찰만으로 반복 하중을 확인했다고 말하지 않는다.
-
-입계 파괴: 결정립 경계를 따른 분리.
-
-'뒷받침합니다', '입증합니다' 대신 '관련지어 해석할 수 있습니다'처럼 보수적으로 표현한다.
-
-mechanism_relation에는 하중·응력 집중·경계 약화 등의 원인 추정을 넣지 않는다.
-
-
-
-[3단계: 가능한 원인 — 마지막에 수행]
-
-expected_cause는 다음 후보에서 하나를 정확히 선택한다. 이미지로 특정 원인을 판별할 수 없다면 첫 번째 기본 후보를 선택한다.
-
-{causes}
-
-cause_explanation에는 선택한 원인만 추정형으로 설명한다. 표면 구조가 하중이나 응력을 유발했다고 인과관계를 거꾸로 쓰지 않는다.
-
-원인과 메커니즘은 이미지 하나로 확정할 수 없다.
-
-
-
-참고 재질: {condition}
-
-신뢰도에 따른 표현: {confidence_note}
-
-반드시 한국어로, 필드당 한 문장 이내로, 아래 JSON 객체만 출력한다.
-
-{{
-
-  "feature": "실제 보이는 핵심 형상의 짧은 명사구",
-
-  "visual_observation_1": "대표 형상 관찰 한 문장",
-
-  "visual_observation_2": "위치·분포·방향 관찰 한 문장. 관찰할 내용이 없으면 값은 공백 없이 비워둔다",
-
-  "mechanism_relation": "관찰 구조와 CNN 예측 메커니즘 연결 한 문장",
-
-  "expected_cause": "위 허용 후보 하나",
-
-  "cause_explanation": "선택한 원인의 보수적 추정 한 문장"
-
-}}"""
-
-
-def append_integrated_context(prompt, gradcam_summary=None, probabilities=None,
-                              decision_path="", references_text="", imaging=None):
-    """Supplement original v7 prompt with RAG and structured CNN metadata."""
-    parts = []
-    imaging_text = imaging_info.prompt_text(imaging)
-    if imaging_text:
-        parts.append("SEM 촬영 정보 (사용자 입력, 관찰 해석에 참고):\n" + imaging_text)
-    if probabilities:
-        parts.append("클래스별 CNN 출력 정보 (예측 재분류 금지): " + str(probabilities)[:1200])
-    if gradcam_summary:
-        parts.append("Grad-CAM++ 정량적 영역 요약 (위치 강조이며 실제 결함 확정 아님): " + str(gradcam_summary)[:1600])
-    if decision_path:
-        parts.append("CNN 판정 경로 (설명 참고용): " + str(decision_path)[:600])
+def build_prompt(prediction: str, confidence_percent: float, material: str,
+                 imaging=None, cam_text: str = "", context=None,
+                 references_text: str = "", background=None) -> str:
+    """
+    분석(관찰) 프롬프트.
+    - 이 호출의 핵심은 '이미지에서 보이는 것'을 기록하는 것이다. 해석·원인은 짧게 두고,
+      보고서 단계에서 지식 카드와 필수 반영 사항으로 확장한다.
+    - 금지 규칙을 줄이고 '무엇을 쓰는지'를 구체적으로 지시했다 (금지가 많으면 작은 모델은 일반론으로 도망간다).
+    - 촬영 정보·관찰 지시는 JSON 형식보다 앞에 둔다.
+    """
+    context = context or {}
+    imaging_text = imaging_info.prompt_text(imaging) or "- 입력 없음"
+    background_text = background_info.prompt_text(background) or "- 입력 없음"
+    material_text = (
+        "정보 없음" if material in UNKNOWN_MATERIALS
+        else f"{MATERIAL_LABELS.get(material, material)} (관찰에는 쓰지 않고, 원인 후보를 고를 때만 참고)"
+    )
+    obs_hints = context.get("obs_hints") or [
+        "스케일 정보가 없으므로 크기는 '이미지 폭에 비해 작다/크다'처럼 이미지 안에서의 상대 크기로만 쓴다."
+    ]
+    hints = "\n".join(f"- {h}" for h in obs_hints)
+    causes = "\n".join(f"- {c}" for c in (context.get("cause_candidates") or CAUSE_CANDIDATES[prediction]))
+    refs = ""
     if references_text:
-        parts.append("검색 문헌 참고 (이미지에 보이지 않는 특징을 관찰 사실로 주장하지 말 것):\n" + str(references_text)[:4500])
-    return prompt + ("\n\n[추가 참고 정보]\n" + "\n".join(parts) if parts else "")
+        refs = ("\n[참고 문헌 발췌] (일반 지식이며 이 이미지의 관찰 사실이 아니다)\n"
+                + str(references_text)[:2500] + "\n")
+
+    return f"""너는 금속 파단면 SEM 이미지를 관찰해 기록하는 도우미다.
+첫 번째 이미지는 원본이다. 두 번째 이미지가 있으면 같은 이미지에 CNN 이 주목한 영역의 윤곽선을 그린 것이다.
+
+[입력 정보]
+- CNN 예측: {prediction} (확률 {confidence_percent:.1f}%). 이 예측은 바꾸지 않는다.
+- 재질: {material_text}
+- SEM 촬영 정보:
+{imaging_text}
+- 사전 배경 정보 (관찰에는 쓰지 않고, 원인 후보를 고를 때만 참고):
+{background_text}
+
+[CNN 판단 정보]
+{cam_text or "- 없음"}
+{refs}
+[관찰 지시]
+- 원본 이미지에서 실제로 보이는 형상(함몰부, 평탄한 면, 계단, 선형 무늬, 경계, 2차 균열 등)의 모양·상대 크기·밀도·분포를 쓴다.
+{hints}
+- 한 이미지 안에 형태가 다른 영역이 섞여 있으면 각각 어디에 있는지 쓴다.
+- 윤곽선의 색, 이미지 속 글자·스케일 바·화살표·패널 기호는 파면 특징이 아니다.
+- 확실하지 않으면 "~로 보인다"로 쓰고, 보이지 않는 것은 쓰지 않는다.
+
+[작성할 필드]
+- feature: 가장 눈에 띄는 형상을 20~50자 명사구로 쓴다. 원인·파손 유형 이름·재질은 넣지 않는다.
+  (예: "스케일 바보다 훨씬 작은 등축 딤플이 밀집한 표면")
+- visual_observation_1: 대표 형상의 모양·상대 크기·밀도를 1~2문장으로 쓴다.
+- visual_observation_2: 그 형상의 분포 위치, 다른 형태의 영역이 있는지를 1~2문장으로 쓴다.
+- mechanism_relation: 관찰한 형상을 {prediction} 메커니즘({MECHANISM_HINT[prediction]})과 1문장으로 연결한다. "관련지어 해석할 수 있습니다"처럼 쓴다.
+- expected_cause: 아래 후보 중 하나를 글자 그대로 고른다. 판단할 근거가 없으면 첫 번째 후보를 고른다.
+{causes}
+- cause_explanation: 고른 원인을 관찰·재질·사전 배경 정보와 연결해 추정형("가능성이 있습니다")으로 1~2문장 쓴다.
+
+{get_confidence_instruction(confidence_percent)}
+반드시 한국어로, 아래 JSON 객체만 출력한다.
+{{
+  "feature": "...",
+  "visual_observation_1": "...",
+  "visual_observation_2": "...",
+  "mechanism_relation": "...",
+  "expected_cause": "...",
+  "cause_explanation": "..."
+}}"""
 
 
 # =========================================================
@@ -455,7 +478,9 @@ def validate_visual_observation(text: str) -> str:
 
     results = []
     for sentence in re.split(r'(?<=[.!?。])\s+', text):
-        if re.search(r'\d+(?:\.\d+)?\s*(?:mm|cm|μm|µm|㎛)', sentence, re.I):
+        # 이미지에서 잰 것처럼 보이는 수치는 빼되, 스케일 바와의 상대 비교 문장은 남긴다.
+        if (re.search(r'\d+(?:\.\d+)?\s*(?:mm|cm|μm|µm|㎛|nm)', sentence, re.I)
+                and '스케일' not in sentence):
             continue
 
         # 인과·분류 해석 접속절만 제거한다.
@@ -507,14 +532,14 @@ def validate_mechanism_relation(prediction: str, text: str) -> str:
     return ensure_sentence_end(text)
 
 
-def validate_expected_cause(prediction: str, cause: str) -> str:
+def validate_expected_cause(prediction: str, cause: str, candidates=None) -> str:
     cause = clean_text(cause)
 
     if not cause:
         warn("expected_cause", "빈 응답")
         return ""
 
-    if cause.rstrip('.!?。 ') not in CAUSE_CANDIDATES[prediction]:
+    if cause.rstrip('.!?。 ') not in (candidates or CAUSE_CANDIDATES[prediction]):
         warn("expected_cause", "허용 후보 목록에 없는 문구")
 
     invalid_keywords = {
@@ -600,11 +625,20 @@ def generate_llm_analysis(
     decision_path: str = "",
     references_text: str = "",
     imaging=None,
+    background=None,
 ):
-    prompt = build_prompt(prediction, confidence_percent, material)
-    prompt = append_integrated_context(
-        prompt, gradcam_summary, probabilities, decision_path, references_text,
-        imaging=imaging_info.normalize(imaging),
+    imaging = imaging_info.normalize(imaging)
+    background = background_info.normalize(background)
+    prediction_en = next((en for en, ko in KO_NAMES.items() if ko == prediction), prediction)
+    context = report_rules.build_context(prediction_en, material, imaging, probabilities, background)
+
+    prompt = build_prompt(
+        prediction, confidence_percent, material,
+        imaging=imaging,
+        cam_text=build_cam_text(gradcam_summary, probabilities, decision_path),
+        context=context,
+        references_text=references_text if USE_RAG_IN_ANALYSIS else "",
+        background=background,
     )
 
     parsed = None
@@ -624,26 +658,23 @@ def generate_llm_analysis(
         else:
             print("[Gemma] 이미지 없음 → 텍스트 정보만 사용")
 
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
+        response = _chat(
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "너는 금속 파손 단면 이미지의 시각적 특징을 "
-                        "관찰하는 멀티모달 설명 생성기다. "
-                        "파손 유형은 CNN이 이미 결정했으며 변경하지 않는다. "
-                        "반드시 한국어 JSON만 출력한다."
+                        "너는 금속 파단면 SEM 이미지에서 보이는 형상을 기록하는 관찰자다. "
+                        "CNN 이 정한 파손 유형은 바꾸지 않는다. 한국어 JSON 만 출력한다."
                     ),
                 },
                 user_message,
             ],
-            format="json",
+            format=ANALYSIS_SCHEMA,
             options={
                 "temperature": 0.25,
                 "top_p": 0.9,
                 "num_ctx": LLM_NUM_CTX,
-                "num_predict": 1024,
+                "num_predict": 1536,
             },
         )
 
@@ -670,7 +701,7 @@ def generate_llm_analysis(
         prediction, parsed.get("mechanism_relation", "")
     )
     llm_expected_cause = validate_expected_cause(
-        prediction, parsed.get("expected_cause", "")
+        prediction, parsed.get("expected_cause", ""), context["cause_candidates"]
     )
     cause_explanation = validate_cause_explanation(
         prediction, parsed.get("cause_explanation", "")
@@ -1047,8 +1078,7 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
     empty_result["confidence_difference"] = confidence_text
 
     try:
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
+        response = _chat(
             messages=[
                 {
                     "role": "system",
@@ -1092,8 +1122,16 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
 # 보고서 보조 함수 (/report)
 # =========================================================
 
-def build_next_steps(prediction, prediction_en, confidence_percent, material, gradcam_summary):
-    steps = list(NEXT_STEPS[prediction])
+def build_next_steps(prediction, prediction_en, confidence_percent, material, gradcam_summary,
+                     extra_steps=None, background=None):
+    # 입력 조건(촬영 위치·저배율·재질 불일치·배경 정보)에서 나온 항목을 맨 앞에 둔다.
+    base = list(NEXT_STEPS[prediction])
+    background = background or {}
+    if background.get("environment"):
+        base = [s for s in base if s["title"] != "사용 환경 확인"]
+    if background.get("load") or background.get("temperature"):
+        base = [s for s in base if s["title"] != "사용 온도와 충격 이력 확인"]
+    steps = list(extra_steps or []) + base
 
     if material in UNKNOWN_MATERIALS:
         steps.append({
@@ -1127,7 +1165,12 @@ def build_next_steps(prediction, prediction_en, confidence_percent, material, gr
     return steps
 
 
-def build_confidence_comment(confidence_percent):
+def build_confidence_comment(confidence_percent, note=""):
+    comment = _confidence_comment(confidence_percent)
+    return f"{comment} {note}".strip() if note else comment
+
+
+def _confidence_comment(confidence_percent):
     level = get_confidence_level(confidence_percent)
 
     if level == "high":
@@ -1181,98 +1224,80 @@ def check_report_text(field, text, *, other_types=None,
 
 def build_report_prompt(prediction, confidence_percent, material,
                         cam_text, feature, obs1, obs2, knowledge_text="",
-                        imaging=None):
+                        imaging=None, must_text="", background=None):
 
     if material in UNKNOWN_MATERIALS:
-        material_block = (
-            "재질 정보 없음.\n"
-            "재질이나 재질의 성질을 절대 언급하지 않는다. "
-            "이미지 관찰과 Grad-CAM++ 결과만으로 서술한다."
-        )
+        material_block = "재질 정보 없음. 재질이나 재질의 성질은 쓰지 않는다."
     else:
         material_ko = MATERIAL_LABELS.get(material, material)
         material_block = (
             f"사용자가 입력한 재질: {material_ko}\n"
             f"재질의 일반적 성질(참고): {MATERIAL_TRAITS.get(material, '')}\n"
-            "cause 필드에서 이 재질 성질을 이미지 관찰, Grad-CAM++ 결과와 "
-            "연결해 설명한다. 재질 성질만으로 원인을 단정하지 않는다."
+            "cause 에서 이 성질을 이미지 관찰과 연결해 쓰되, 재질 성질만으로 원인을 단정하지 않는다."
         )
 
-    imaging_text = imaging_info.prompt_text(imaging)
-    if imaging_text:
-        imaging_block = (
-            "\n[SEM 촬영 정보 (사용자 입력)]\n"
-            f"{imaging_text}\n"
-            "촬영 위치, 검출기, 세척·코팅 정보를 관찰 해석에 반영하고, "
-            "관련 내용은 [참고 지식 카드]를 근거로 쓴다.\n"
-        )
-    else:
-        imaging_block = ""
+    imaging_text = imaging_info.prompt_text(imaging) or "- 입력 없음"
+    background_text = background_info.prompt_text(background) or "- 입력 없음 (사용 환경·하중 조건을 지어내지 않는다)"
 
-    if imaging_info.has_scale(imaging):
-        scale_rule = (
-            "- 사용자가 입력한 배율·스케일 바로 관찰 규모(어느 정도 크기의 특징까지 볼 수 있는지)를 "
-            "설명할 수 있다. 다만 이미지에서 직접 잰 값이 아니므로 딤플 크기, 줄무늬 간격의 수치를 단정하지 않는다."
-        )
-    else:
-        scale_rule = "- 이미지에 배율 정보가 없으므로 딤플 크기, 줄무늬 간격 같은 절대 크기나 간격을 판단하지 않는다."
+    must_block = must_text or "- 없음"
 
     knowledge_block = ""
     if knowledge_text:
         knowledge_block = (
-            "\n[참고 지식 카드]\n"
-            "아래 카드는 문헌(ASM Handbook, 리뷰 논문 등)을 요약한 일반 지식이며 "
-            "이 이미지에서 관찰된 사실이 아니다.\n"
-            "- 카드 내용을 이 이미지에서 '관찰되었다'고 쓰지 않는다. "
-            "관찰은 [이전 이미지 분석 결과]에서만 가져온다.\n"
-            "- 카드는 특징의 일반적 의미, 판단 근거의 해석, 원인 후보, 확인 사항을 "
-            "설명할 때만 근거로 쓴다.\n"
+            "\n[참고 지식 카드] (문헌 요약 일반 지식. 이 이미지에서 관찰한 사실이 아니다. "
+            "[우선] 표시 카드를 먼저 반영한다.)\n"
             f"{knowledge_text}\n"
         )
 
-    return f"""
-너는 금속 파손 단면 분석 결과를 보고서 문장으로 정리하는 도우미다.
-파손 유형은 CNN이 이미 결정했으며 변경하거나 다른 유형을 제안하지 않는다.
+    return f"""너는 금속 파손 단면 분석 결과를 보고서 문장으로 정리하는 도우미다.
+파손 유형은 CNN 이 이미 정했으며 바꾸거나 다른 유형을 제안하지 않는다.
 
 [CNN 결과]
-- 최종 파손 유형: {prediction}
-- 신뢰도: {confidence_percent:.1f}%
+- 최종 파손 유형: {prediction} (신뢰도 {confidence_percent:.1f}%)
 
-[이전 이미지 분석 결과]
-- 주요 특징: {feature}
-- 관찰 1: {obs1}
-- 관찰 2: {obs2}
+[이 이미지의 관찰 결과] (이전 단계에서 이미지를 보고 기록한 내용)
+- 주요 특징: {feature or "기록 없음"}
+- 관찰 1: {obs1 or "기록 없음"}
+- 관찰 2: {obs2 or "기록 없음"}
 
 [모델 판단 근거]
 {cam_text}
 
 [재질 정보]
 {material_block}
-{imaging_block}{knowledge_block}
-[작성 규칙]
-- 반드시 한국어로 작성한다.
-- 입력에 없는 특징, 사용 환경, 사고 상황을 만들어내지 않는다.
-- Grad-CAM++ 영역은 모델이 주목한 영역이며 실제 결함 위치가 아니다.
-- 원인은 반드시 추정형("가능성이 있습니다", "추정할 수 있습니다")으로 쓴다.
-- "확실합니다", "분명합니다", "원인입니다", "틀림없습니다"를 쓰지 않는다.
-- 색상과 밝기를 특징으로 쓰지 않는다.
-{scale_rule}
 
+[SEM 촬영 정보]
+{imaging_text}
+
+[사전 배경 정보] (사용자가 입력한 부품·시험 조건. cause 에서 관찰과 연결해 쓴다)
+{background_text}
+
+[필수 반영 사항] 아래 각 항목의 의미가 괄호 안 필드에 반드시 드러나게 쓴다.
+{must_block}
+{knowledge_block}
 [필드]
-- characteristics: "{prediction}"의 일반적인 특징과 이 이미지에서 관찰된 특징 (2~3문장)
-- basis: Grad-CAM++ 영역(위치, 분포, 겹침)과 확률을 근거로 이렇게 분류된 이유 (2~4문장). 확률 수치를 나열하지 않는다.
-- cause: 추정되는 파손 원인 (3~4문장). 앞선 특징과 근거를 연결한다.
-- next_steps_note: 정확한 원인 분석을 위해 아래 확인 사항이 필요한 이유 (1문장)
-- used_cards: 위 필드를 쓰는 데 실제로 사용한 지식 카드 ID 목록 (사용하지 않았으면 빈 목록)
+- characteristics (2~3문장): 먼저 [이 이미지의 관찰 결과]를 근거로 이 이미지에서 보이는 특징을 쓰고,
+  그다음 그 특징이 {prediction}에서 갖는 일반적 의미를 1문장 덧붙인다.
+- basis (2~3문장): Grad-CAM++ 강조 영역의 위치·분포와 확률을 근거로 이렇게 분류된 이유를 쓴다.
+  강조 영역은 모델이 주목한 곳이지 실제 결함 위치가 아니다. 확률 수치는 나열하지 않는다.
+- cause (3~4문장): 관찰과 입력 정보(재질·촬영 정보·사전 배경 정보)를 연결해 추정 원인을 쓴다. [필수 반영 사항]의 cause 항목을 포함한다.
+  배경 정보와 관찰이 서로 맞지 않으면 맞지 않는다고 쓴다.
+- next_steps_note (1문장): 정확한 원인 분석을 위해 추가 확인이 필요한 이유.
+- used_cards: 위 필드에 내용을 실제로 쓴 카드 ID만 넣는다. 쓰지 않은 카드는 넣지 않는다.
 
-JSON 이외의 문장은 출력하지 않는다.
+[작성 규칙]
+- 한국어로 쓴다. 원인은 "가능성이 있습니다", "추정할 수 있습니다"처럼 추정형으로 쓴다.
+- "확실합니다", "분명합니다", "원인입니다", "틀림없습니다"는 쓰지 않는다.
+- 입력에 없는 사용 환경·사고 상황은 만들지 않는다. 카드 내용을 이 이미지에서 관찰했다고 쓰지 않는다.
+- 윤곽선 색이나 밝기를 특징으로 쓰지 않는다.
 
+JSON 객체만 출력한다.
 {{
     "characteristics": "...",
     "basis": "...",
     "cause": "...",
     "next_steps_note": "...",
-    "used_cards": ["카드 ID", "..."]
+    "used_cards": ["카드 ID"]
 }}
 """
 
@@ -1283,7 +1308,8 @@ JSON 이외의 문장은 출력하지 않는다.
 
 def generate_report(prediction, prediction_en, confidence_percent,
                     material="", probabilities=None, gradcam_summary=None,
-                    decision_path="", feature="", obs1="", obs2="", imaging=None):
+                    decision_path="", feature="", obs1="", obs2="", imaging=None,
+                    background=None):
 
     no_material = material in UNKNOWN_MATERIALS
     imaging = imaging_info.normalize(imaging)
@@ -1296,6 +1322,13 @@ def generate_report(prediction, prediction_en, confidence_percent,
 
     cam_text = build_cam_text(gradcam_summary, probabilities, decision_path)
 
+    # 입력 조건 → 필수 반영 사항 (파이썬 규칙)
+    background = background_info.normalize(background)
+    context = report_rules.build_context(prediction_en, material, imaging, probabilities, background)
+    must_text = report_rules.format_must_lines(context["must_lines"])
+    if must_text:
+        print("[필수 반영]\n" + must_text)
+
     cards = select_cards(
         prediction_en,
         material,
@@ -1303,6 +1336,7 @@ def generate_report(prediction, prediction_en, confidence_percent,
         cam_query=cam_text,
         banned_words=MATERIAL_WORDS if no_material else (),
         imaging=imaging,
+        background_cards=context["background_cards"],
     )
 
     print("[지식 카드] 선택:", ", ".join(c["id"] for c in cards) or "없음")
@@ -1312,13 +1346,14 @@ def generate_report(prediction, prediction_en, confidence_percent,
         cam_text, feature, obs1, obs2,
         knowledge_text=format_cards_for_prompt(cards),
         imaging=imaging,
+        must_text=must_text,
+        background=background,
     )
 
     parsed = None
     llm_error = ""
     try:
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
+        response = _chat(
             messages=[
                 {
                     "role": "system",
@@ -1330,8 +1365,9 @@ def generate_report(prediction, prediction_en, confidence_percent,
                 },
                 {"role": "user", "content": prompt},
             ],
-            format="json",
-            options={"temperature": 0.25, "top_p": 0.9, "num_ctx": LLM_NUM_CTX},
+            format=REPORT_SCHEMA,
+            options={"temperature": 0.25, "top_p": 0.9, "num_ctx": LLM_NUM_CTX,
+                     "num_predict": 1536},
         )
 
         raw = response["message"]["content"].strip()
@@ -1366,6 +1402,9 @@ def generate_report(prediction, prediction_en, confidence_percent,
     )
 
     used_cards = parse_used_cards(parsed.get("used_cards", []), cards)
+    used_cards = verify_used_cards(
+        used_cards, cards, " ".join((characteristics, basis, cause, note))
+    )
 
     return {
         "characteristics": characteristics,
@@ -1374,15 +1413,19 @@ def generate_report(prediction, prediction_en, confidence_percent,
         "next_steps_note": note,
         "next_steps": build_next_steps(
             prediction, prediction_en, confidence_percent,
-            material, gradcam_summary,
+            material, gradcam_summary, extra_steps=context["extra_steps"],
+            background=background,
         ),
-        "confidence_comment": build_confidence_comment(confidence_percent),
+        "confidence_comment": build_confidence_comment(
+            confidence_percent, context["reliability_note"]
+        ),
         "confidence_status": get_confidence_level(confidence_percent),
         "material_label": (
             "모름 (보고서에 반영하지 않음)" if no_material
             else MATERIAL_LABELS.get(material, material)
         ),
         "imaging_label": imaging_info.label(imaging),
+        "background_label": background_info.label(background),
         "knowledge_refs": public_cards(cards, used_cards),
         "llm_error": llm_error,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),

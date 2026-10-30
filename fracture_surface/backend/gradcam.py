@@ -312,6 +312,46 @@ def _position_label(cx, cy, W, H):
     return f"{col} {row}"
 
 
+def _describe_position(mask, W, H):
+    """
+    활성 영역의 위치 설명.
+    전체 픽셀의 무게중심 하나로 위치를 정하면, 가장자리 여러 곳에 흩어진 영역도
+    평균이 가운데로 모여 '중앙부'가 된다. 그래서 연결 영역별로 위치를 구해 합친다.
+    """
+    m = (mask > 0).astype(np.uint8)
+    n, _, stats, cents = cv2.connectedComponentsWithStats(m, connectivity=8)
+    comps = [(int(stats[i, cv2.CC_STAT_AREA]), cents[i]) for i in range(1, n)]
+    total = sum(a for a, _ in comps)
+    if total == 0:
+        return "위치 불명", 0
+
+    # 전체 활성 면적의 10% 이상인 영역만 '주요 영역'으로 본다.
+    major = sorted((c for c in comps if c[0] >= 0.1 * total), key=lambda c: -c[0])
+    labels = []
+    for _, (cx, cy) in major:
+        label = _position_label(cx, cy, W, H)
+        if label not in labels:
+            labels.append(label)
+
+    if not labels:
+        position = "작은 영역들이 이미지 전반에 흩어져 있음"
+    elif len(labels) == 1:
+        position = labels[0]
+    elif len(labels) <= 4:
+        position = "·".join(labels) + " 등 여러 위치에 분산"
+    else:
+        position = "이미지 전반의 여러 위치에 분산"
+
+    # 테두리 15% 띠 안에 활성 픽셀의 70% 이상이 있으면 가장자리 위주로 본다.
+    ys, xs = np.nonzero(m)
+    bx, by = 0.15 * W, 0.15 * H
+    edge = ((xs < bx) | (xs >= W - bx) | (ys < by) | (ys >= H - by)).mean()
+    if edge >= 0.7:
+        position += " (주로 이미지 가장자리)"
+
+    return position, len(major)
+
+
 def summarize_gradcam_regions(masks_dict, overlap_masks, probs_by_class, img_shape):
     """
     LLM에 전달할 Grad-CAM++ 영역 요약.
@@ -343,11 +383,19 @@ def summarize_gradcam_regions(masks_dict, overlap_masks, probs_by_class, img_sha
         ]
 
         n_labels, _ = cv2.connectedComponents(mask, connectivity=8)
+        position, n_major = _describe_position(mask, W, H)
+
+        if n_major >= 3:
+            spread = "여러 영역으로 분산"
+        elif bbox_ratio >= 0.5:
+            spread = "넓게 분포"
+        else:
+            spread = "국부적으로 집중"
 
         summary[name] = {
             "probability": round(float(probs_by_class[name]) * 100, 1),
-            "position": _position_label(cx, cy, W, H),
-            "spread": "넓게 분포" if bbox_ratio >= 0.5 else "국부적으로 집중",
+            "position": position,
+            "spread": spread,
             "region_count": int(n_labels - 1),
             "overlap_ratio": round(overlap_area / area * 100, 1),
             "overlaps_with": overlaps_with,

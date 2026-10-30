@@ -59,6 +59,7 @@ from llm_service import (
 )
 
 
+import background_info
 import imaging_info
 from rag_service import retrieve_references, format_references_for_prompt, public_references
 
@@ -205,10 +206,21 @@ model, INFER_CFG = load_model(
     num_classes=NUM_CLASSES,
 )
 
-# 검증 중인 패치 설정. 모델 입력 크기(img_size)는 학습 설정을 유지한다.
+# 슬라이딩 윈도우 패치 크기. 기본값은 학습 설정(config.json, 384/192)이다.
+# 패치 224 는 224px 영역을 384로 늘려 넣으므로 형상이 학습 때보다 약 1.7배 크게 보인다.
+# 정답 세트로 비교(eval_patch_size.py)해 나아질 때만 환경변수로 바꿔 쓴다.
+#   PowerShell: $env:CNN_PATCH = "224"   (stride 는 기본 patch/2, $env:CNN_STRIDE 로 지정 가능)
+#   이미지 전체 1장으로 추론: $env:CNN_PATCH = "whole"
 ACTIVE_INFER_CFG = INFER_CFG.copy()
-ACTIVE_INFER_CFG["patch_size"] = 224
-ACTIVE_INFER_CFG["stride"] = 112
+_patch_env = os.getenv("CNN_PATCH", "").strip().lower()
+if _patch_env == "whole":
+    ACTIVE_INFER_CFG["patch_size"] = None
+    ACTIVE_INFER_CFG["stride"] = None
+elif _patch_env:
+    ACTIVE_INFER_CFG["patch_size"] = int(_patch_env)
+    ACTIVE_INFER_CFG["stride"] = int(os.getenv("CNN_STRIDE", int(_patch_env) // 2))
+print(f"✅ 추론 패치 설정: patch={ACTIVE_INFER_CFG['patch_size']}, stride={ACTIVE_INFER_CFG['stride']}"
+      + (" (환경변수 CNN_PATCH)" if _patch_env else " (학습 설정 기본값)"))
 
 
 # ═══════════════════════════════════════════════════════
@@ -486,6 +498,13 @@ async def analyze_fracture(
     sem_detector: str = Form(""),
     sem_cleaned: str = Form(""),
     sem_coated: str = Form(""),
+    # 사전 배경 정보 (모두 선택, 비우면 "모름"). 복수 선택 항목은 쉼표로 구분
+    bg_environment: str = Form(""),
+    bg_load: str = Form(""),
+    bg_temperature: str = Form(""),
+    bg_process: str = Form(""),
+    bg_failure_manner: str = Form(""),
+    bg_note: str = Form(""),
     conf_thresh: float = Form(0.05),
     cam_percentile: float = Form(80.0),
     min_area_ratio: float = Form(0.005),
@@ -499,7 +518,16 @@ async def analyze_fracture(
         "cleaned": sem_cleaned,
         "coated": sem_coated,
     })
-    print(f"요청 수신 — 재질: {material} · 촬영 정보: {imaging_info.label(imaging)}")
+    background = background_info.normalize({
+        "environment": bg_environment,
+        "load": bg_load,
+        "temperature": bg_temperature,
+        "process": bg_process,
+        "failure_manner": bg_failure_manner,
+        "note": bg_note,
+    })
+    print(f"요청 수신 — 재질: {material} · 촬영 정보: {imaging_info.label(imaging)}"
+          f" · 배경 정보: {background_info.label(background)}")
 
     model.eval()
 
@@ -514,7 +542,8 @@ async def analyze_fracture(
         io.BytesIO(image_bytes)
     ).convert("RGB")
 
-    # 작은 이미지 확대 (테스트용)
+    # 작은 이미지 확대: 짧은 변이 224px 미만이면 확대한다.
+    # (CNN·Grad-CAM 은 확대본을, LLM 에는 원본 바이트를 보낸다. 형상은 같고 크기만 다르다.)
     MIN_IMAGE_SIDE = 224
 
     W, H = image.size
@@ -1026,6 +1055,7 @@ async def analyze_fracture(
             gradcam_image_bytes=gradcam_llm_bytes,
             references_text=references_text,
             imaging=imaging,
+            background=background,
         )
     )
 
@@ -1137,6 +1167,9 @@ async def analyze_fracture(
             material,
 
         "imaging": imaging,
+
+        # 입력 사전 배경 정보 (보고서 생성 시 다시 전달됨)
+        "background": background,
 
 
         # ─────────────────────────────────────────────
@@ -1572,6 +1605,7 @@ async def make_report(payload: dict):
             obs1=payload.get("visual_observation_1", ""),
             obs2=payload.get("visual_observation_2", ""),
             imaging=payload.get("imaging"),
+            background=payload.get("background"),
         )
 
         return {"status": "success", **report}

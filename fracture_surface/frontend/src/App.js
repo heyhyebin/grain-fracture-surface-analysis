@@ -93,6 +93,71 @@ const imagingSummary = (imaging) => {
   return parts.length ? parts.join(" · ") : "모름";
 };
 
+// 사전 배경 정보 (선택 입력, 비우면 "모름") — 값은 backend/background_info.py 와 같아야 한다
+const BG_ENVIRONMENT_LABELS = {
+  air: "일반 대기",
+  chloride: "수분·염화물 (해수 등)",
+  hydrogen: "수소 노출 (수소 충전·도금·산세·H₂S 등)",
+  chemical: "산·알칼리·황화물 등 화학 약품",
+};
+
+const BG_LOAD_LABELS = {
+  static: "정하중·단조 인장 (과부하·인장 시험)",
+  impact: "충격",
+  cyclic: "반복·진동",
+  sustained: "장시간 지속 하중",
+};
+
+const BG_TEMPERATURE_LABELS = {
+  low: "저온 (0 ℃ 이하·극저온)",
+  room: "상온",
+  high: "고온 (수백 ℃ 이상)",
+};
+
+const BG_PROCESS_LABELS = {
+  heat_treated: "열처리",
+  plated: "도금·산세",
+  welded: "용접",
+  cold_worked: "냉간 가공",
+};
+
+const BG_MANNER_LABELS = {
+  sudden: "전조 없이 갑자기",
+  gradual: "전조 있음 (균열 성장·소음·누설)",
+};
+
+const EMPTY_BACKGROUND = {
+  environment: [],
+  load: "",
+  temperature: "",
+  process: [],
+  failure_manner: "",
+  note: "",
+};
+
+// 백엔드가 돌려준 background 를 입력란 값으로 변환 (예전 기록에는 없을 수 있음)
+const toBackgroundInputs = (bg) => ({
+  environment: Array.isArray(bg?.environment) ? bg.environment : [],
+  load: bg?.load || "",
+  temperature: bg?.temperature || "",
+  process: Array.isArray(bg?.process) ? bg.process : [],
+  failure_manner: bg?.failure_manner || "",
+  note: bg?.note || "",
+});
+
+const backgroundSummary = (bg, material) => {
+  const parts = [];
+  if (material && material !== "unknown") parts.push(MATERIAL_LABELS[material] || material);
+  if (bg.environment.length)
+    parts.push(bg.environment.map((e) => BG_ENVIRONMENT_LABELS[e].split(" (")[0]).join(", "));
+  if (bg.load) parts.push(BG_LOAD_LABELS[bg.load].split(" (")[0]);
+  if (bg.temperature) parts.push(BG_TEMPERATURE_LABELS[bg.temperature].split(" (")[0]);
+  if (bg.process.length) parts.push(bg.process.map((p) => BG_PROCESS_LABELS[p]).join(", "));
+  if (bg.failure_manner) parts.push(BG_MANNER_LABELS[bg.failure_manner].split(" (")[0]);
+  if (bg.note) parts.push("메모 있음");
+  return parts.length ? parts.join(" · ") : "모름";
+};
+
 const MATERIAL_LABELS = {
   steel: "강 (Steel)",
   stainless_steel: "스테인리스강",
@@ -103,6 +168,7 @@ const MATERIAL_LABELS = {
   magnesium: "마그네슘 합금",
   nickel_alloy: "니켈 합금",
   tool_steel: "공구강",
+  hea: "고엔트로피 합금 (HEA)",
   unknown: "모름",
 };
 
@@ -1364,6 +1430,11 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
               SEM 촬영 정보: {report.imaging_label}
             </p>
           )}
+          {report?.background_label && (
+            <p className="text-xs text-slate-500 mt-1">
+              사전 배경 정보: {report.background_label}
+            </p>
+          )}
           {saveState?.status === "saving" && (
             <p className="no-print text-[11px] text-slate-400 mt-1">보고서 저장 중…</p>
           )}
@@ -1581,6 +1652,20 @@ export default function App() {
 
   const updateImaging = (key) => (e) =>
     setImaging((prev) => ({ ...prev, [key]: e.target.value }));
+
+  const [background, setBackground] = useState(EMPTY_BACKGROUND);
+
+  const updateBackground = (key) => (e) =>
+    setBackground((prev) => ({ ...prev, [key]: e.target.value }));
+
+  // 복수 선택 항목 (사용 환경, 제조·처리 이력)
+  const toggleBackground = (key, value) =>
+    setBackground((prev) => {
+      const list = prev[key].includes(value)
+        ? prev[key].filter((v) => v !== value)
+        : [...prev[key], value];
+      return { ...prev, [key]: list };
+    });
 
   const [
     result,
@@ -1920,7 +2005,7 @@ useEffect(() => {
       result?.material
     ] ||
     result?.material ||
-    "-";
+    "모름";
 
   const confidenceStyle =
     CONFIDENCE_BOX_STYLES[
@@ -2196,6 +2281,7 @@ useEffect(() => {
       );
 
       setImaging(toImagingInputs(item.result.imaging));
+      setBackground(toBackgroundInputs(item.result.background));
 
       setShowSimilarModal(
         false
@@ -2398,12 +2484,6 @@ const handleDbToggle = async (next) => {
         );
       }
 
-      if (!material) {
-        return alert(
-          "재질을 선택해주세요."
-        );
-      }
-
       const formData =
         new FormData();
 
@@ -2420,6 +2500,11 @@ const handleDbToggle = async (next) => {
       // SEM 촬영 정보 (빈 값 = 모름)
       Object.entries(imaging).forEach(([key, value]) => {
         formData.append(`sem_${key}`, value);
+      });
+
+      // 사전 배경 정보 (빈 값 = 모름, 복수 선택은 쉼표로 구분)
+      Object.entries(background).forEach(([key, value]) => {
+        formData.append(`bg_${key}`, Array.isArray(value) ? value.join(",") : value);
       });
 
       try {
@@ -2575,6 +2660,7 @@ const handleDbToggle = async (next) => {
           visual_observation_1: result.visual_observation_1,
           visual_observation_2: result.visual_observation_2,
           imaging: result.imaging || {},
+          background: result.background || {},
         }),
       });
 
@@ -3242,27 +3328,145 @@ const handleDbToggle = async (next) => {
                     />
 
                     <div className="mt-4 flex gap-3">
-                      <select
-                        value={material}
-                        onChange={(e) => setMaterial(e.target.value)}
-                        className="flex-1 h-11 px-3 rounded-lg border border-slate-300 bg-white text-sm outline-none focus:border-blue-500"
-                      >
-                        <option value="">재질 선택</option>
-                        {Object.entries(MATERIAL_LABELS).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-
                       <button
                         onClick={handleUpload}
                         disabled={uploading}
-                        className="px-7 h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-50 transition"
+                        className="flex-1 h-11 rounded-lg bg-[#172536] text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-50 transition"
                       >
                         {uploading ? "분석 중..." : "분석 시작"}
                       </button>
                     </div>
+
+                    <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <summary className="cursor-pointer text-xs text-slate-600">
+                        사전 배경 정보 (선택) · {backgroundSummary(background, material)}
+                      </summary>
+
+                      <div className="mt-3 flex flex-col gap-3 text-xs">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">재질</span>
+                          <select
+                            value={material}
+                            onChange={(e) => setMaterial(e.target.value)}
+                            className="h-9 px-2 rounded border border-slate-300 bg-white"
+                          >
+                            <option value="">모름</option>
+                            {Object.entries(MATERIAL_LABELS)
+                              .filter(([value]) => value !== "unknown")
+                              .map(([value, label]) => (
+                                <option key={value} value={value}>
+                                  {label}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+
+                        <div>
+                          <p className="text-slate-500 mb-1">사용 환경 (복수 선택)</p>
+                          <div className="grid grid-cols-2 gap-1">
+                            {Object.entries(BG_ENVIRONMENT_LABELS).map(([v, l]) => (
+                              <label key={v} className="flex items-start gap-1.5">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={background.environment.includes(v)}
+                                  onChange={() => toggleBackground("environment", v)}
+                                />
+                                <span>{l}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="flex flex-col gap-1">
+                            <span className="text-slate-500">하중 형태</span>
+                            <select
+                              value={background.load}
+                              onChange={updateBackground("load")}
+                              className="h-9 px-2 rounded border border-slate-300 bg-white"
+                            >
+                              <option value="">모름</option>
+                              {Object.entries(BG_LOAD_LABELS).map(([v, l]) => (
+                                <option key={v} value={v}>{l}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="flex flex-col gap-1">
+                            <span className="text-slate-500">사용 온도</span>
+                            <select
+                              value={background.temperature}
+                              onChange={updateBackground("temperature")}
+                              className="h-9 px-2 rounded border border-slate-300 bg-white"
+                            >
+                              <option value="">모름</option>
+                              {Object.entries(BG_TEMPERATURE_LABELS).map(([v, l]) => (
+                                <option key={v} value={v}>{l}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="flex flex-col gap-1 col-span-2">
+                            <span className="text-slate-500">파손 양상</span>
+                            <select
+                              value={background.failure_manner}
+                              onChange={updateBackground("failure_manner")}
+                              className="h-9 px-2 rounded border border-slate-300 bg-white"
+                            >
+                              <option value="">모름</option>
+                              {Object.entries(BG_MANNER_LABELS).map(([v, l]) => (
+                                <option key={v} value={v}>{l}</option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        <div>
+                          <p className="text-slate-500 mb-1">제조·처리 이력 (복수 선택)</p>
+                          <div className="grid grid-cols-2 gap-1">
+                            {Object.entries(BG_PROCESS_LABELS).map(([v, l]) => (
+                              <label key={v} className="flex items-center gap-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={background.process.includes(v)}
+                                  onChange={() => toggleBackground("process", v)}
+                                />
+                                <span>{l}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <label className="flex flex-col gap-1">
+                          <span className="text-slate-500">메모 (사용 기간, 시험 조건 등 · 200자)</span>
+                          <textarea
+                            rows={2}
+                            maxLength={200}
+                            placeholder="예) 수소 충전 144시간 후 인장 시험"
+                            value={background.note}
+                            onChange={updateBackground("note")}
+                            className="px-2 py-1.5 rounded border border-slate-300 bg-white resize-none"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between">
+                        <p className="text-[11px] text-slate-400">
+                          원인 추정에만 쓰이며, 분류 결과는 바뀌지 않습니다.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBackground(EMPTY_BACKGROUND);
+                            setMaterial("");
+                          }}
+                          className="text-[11px] text-slate-500 underline"
+                        >
+                          모두 모름으로
+                        </button>
+                      </div>
+                    </details>
 
                     <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <summary className="cursor-pointer text-xs text-slate-600">
