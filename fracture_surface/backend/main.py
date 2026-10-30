@@ -205,6 +205,12 @@ model, INFER_CFG = load_model(
     num_classes=NUM_CLASSES,
 )
 
+# 검증 중인 패치 설정. 모델 입력 크기(img_size)는 학습 설정을 유지한다.
+ACTIVE_INFER_CFG = INFER_CFG.copy()
+ACTIVE_INFER_CFG["patch_size"] = 224
+ACTIVE_INFER_CFG["stride"] = 112
+
+
 # ═══════════════════════════════════════════════════════
 # Phase Segmentation 모델 로드
 # ═══════════════════════════════════════════════════════
@@ -474,7 +480,6 @@ async def root():
 async def analyze_fracture(
     file: UploadFile = File(...),
     material: str = Form(""),
-    # SEM 촬영 정보 (모두 선택, 비우면 "모름")
     sem_magnification: str = Form(""),
     sem_scale_bar_um: str = Form(""),
     sem_location: str = Form(""),
@@ -494,10 +499,7 @@ async def analyze_fracture(
         "cleaned": sem_cleaned,
         "coated": sem_coated,
     })
-
-    print(
-        f"요청 수신 — 재질: {material} · 촬영 정보: {imaging_info.label(imaging)}"
-    )
+    print(f"요청 수신 — 재질: {material} · 촬영 정보: {imaging_info.label(imaging)}")
 
     model.eval()
 
@@ -509,12 +511,29 @@ async def analyze_fracture(
     image_bytes = await file.read()
 
     image = Image.open(
-        io.BytesIO(
-            image_bytes
+        io.BytesIO(image_bytes)
+    ).convert("RGB")
+
+    # 작은 이미지 확대 (테스트용)
+    MIN_IMAGE_SIDE = 224
+
+    W, H = image.size
+
+    if min(W, H) < MIN_IMAGE_SIDE:
+        scale = MIN_IMAGE_SIDE / min(W, H)
+
+        new_w = round(W * scale)
+        new_h = round(H * scale)
+
+        image = image.resize(
+            (new_w, new_h),
+            Image.Resampling.LANCZOS
         )
-    ).convert(
-        "RGB"
-    )
+
+        print(
+            f"[작은 이미지 확대] "
+            f"{W}x{H} → {new_w}x{new_h}"
+        )
 
     img_rgb = np.array(
         image
@@ -528,8 +547,9 @@ async def analyze_fracture(
     # ═══════════════════════════════════════════════════
 
     probs_np_mean, patch_probs, patch_boxes = predict_sliding(
-        model, image, INFER_CFG, DEVICE,
+        model, image, ACTIVE_INFER_CFG, DEVICE,
     )
+    print(f"[CNN 패치 설정] 크기={ACTIVE_INFER_CFG['patch_size']}, stride={ACTIVE_INFER_CFG['stride']}, 패치 수={len(patch_boxes)}")
     probs_tensor = torch.from_numpy(probs_np_mean)
     print(f"슬라이딩 윈도우 패치 {len(patch_boxes)}개 → 평균 확률 "
           + ", ".join(f"{n} {p * 100:.1f}%" for n, p in zip(CNN_CLASSES, probs_np_mean)))
@@ -623,7 +643,7 @@ async def analyze_fracture(
         ]
         # 원본 해상도 (H,W) CAM — 패치별 CAM 을 이어 붙인 결과
         cams_dict = gradcam_all.generate_sliding(
-            image, cam_classes, INFER_CFG, DEVICE,
+            image, cam_classes, ACTIVE_INFER_CFG, DEVICE,
         )
 
 
@@ -1116,9 +1136,7 @@ async def analyze_fracture(
         "material":
             material,
 
-        # 입력 SEM 촬영 정보 (보고서 생성 시 다시 전달됨)
-        "imaging":
-            imaging,
+        "imaging": imaging,
 
 
         # ─────────────────────────────────────────────
