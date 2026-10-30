@@ -51,17 +51,20 @@ from gradcam import (
     summarize_gradcam_regions, 
 )
 
-# LLM 분석
+import background_info
+import imaging_info
+from rag_service import (
+    retrieve_references,
+    format_references_for_prompt,
+    public_references,
+)
+
 from llm_service import (
     generate_llm_analysis,
     generate_compare_analysis,
     generate_report,
+    get_analysis_knowledge_refs,
 )
-
-
-import background_info
-import imaging_info
-from rag_service import retrieve_references, format_references_for_prompt, public_references
 
 # ═══════════════════════════════════════════════════════
 # FastAPI 앱 생성
@@ -856,10 +859,9 @@ async def analyze_fracture(
     ].item()
 
 
-    # ═══════════════════════════════════════════════════
     # 최종 파손 유형 결정
-    # Grad-CAM 검출 클래스 중 평균 확률이 가장 높은 것
-    # ═══════════════════════════════════════════════════
+    # Grad-CAM 검출 클래스 중 평균 확률이 가장 높은 유형 선택
+
     detected = [name for name in CNN_CLASSES if name in masks_dict]
 
     if detected:
@@ -1006,8 +1008,25 @@ async def analyze_fracture(
 
     try:
         references = retrieve_references(final_en)
+
         references_text = format_references_for_prompt(references)
         references_public = public_references(references)
+
+        local_count = sum(
+            1 for ref in references
+            if ref.get("source_type") != "online_abstract"
+        )
+
+        online_count = sum(
+            1 for ref in references
+            if ref.get("source_type") == "online_abstract"
+        )
+
+        print(
+            f"[RAG] 로컬 문헌 {local_count}건 / "
+            f"온라인 논문 {online_count}건"
+        )
+
     except Exception as rag_error:
         print(f"[RAG] 검색 실패, 기존 분석 계속 진행: {rag_error}")
         references_text = ""
@@ -1046,6 +1065,31 @@ async def analyze_fracture(
             background=background,
         )
     )
+
+    try:
+        analysis_knowledge_refs = get_analysis_knowledge_refs(
+            prediction=prediction,
+            prediction_en=final_en,
+            material=material,
+            probabilities=similarities,
+            gradcam_summary=gradcam_summary,
+            decision_path=decision_path,
+            feature=llm_result.get("feature", ""),
+            obs1=llm_result.get("visual_observation_1", ""),
+            obs2=llm_result.get("visual_observation_2", ""),
+            imaging=imaging,
+            background=background,
+        )
+
+        print(
+            "[분석 참고 지식]",
+            len(analysis_knowledge_refs),
+            "건 선택",
+        )
+
+    except Exception as e:
+        print("[분석 참고 지식] 선택 실패:", e)
+        analysis_knowledge_refs = []    
 
 
     # ═══════════════════════════════════════════════════
@@ -1191,6 +1235,8 @@ async def analyze_fracture(
             gradcam_contours,
 
         "references": references_public,
+
+        "knowledge_refs": analysis_knowledge_refs,
 
         "gradcam_summary":
             gradcam_summary,

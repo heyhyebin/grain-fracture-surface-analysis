@@ -44,7 +44,7 @@ EMBED_BATCH = 16
 TOP_K = 4
 
 # bge-m3 코사인 유사도 기준. 실제 문서로 돌려 보고 조정할 것.
-MIN_SCORE = 0.35
+MIN_SCORE = 0.50
 
 SUPPORTED_EXTENSIONS = (".pdf", ".txt", ".md")
 
@@ -74,6 +74,35 @@ CLASS_QUERIES = {
         "hydrogen stress corrosion cracking segregation precipitates causes"
     ),
 }
+
+
+# 검색 유사도만으로 다른 파손 유형의 문단이 상위에 올라오는 현상을 완화한다.
+# 아래 가중치는 검증 전 휴리스틱이며, 검색 유사도(score) 자체는 바꾸지 않는다.
+CLASS_TERMS = {
+    "Cleavage": ("cleavage", "cleavage facet", "river pattern", "brittle fracture", "cleavage plane"),
+    "Ductile": ("ductile fracture", "dimple", "microvoid", "void coalescence", "plastic deformation"),
+    "Fatigue": ("fatigue crack", "fatigue fracture", "striations", "beach marks", "cyclic loading"),
+    "Intergranular": ("intergranular", "grain boundary fracture", "grain boundary decohesion", "grain boundary embrittlement"),
+}
+
+# 다른 유형의 용어는 해당 유형의 근거가 없는 경우에만 약하게 감점한다.
+# 유형 비교 논문까지 일괄 배제하지 않기 위함이다.
+OTHER_CLASS_TERMS = {
+    "Cleavage": ("ductile fracture", "fatigue crack", "fatigue fracture", "intergranular fracture"),
+    "Ductile": ("cleavage fracture", "fatigue crack", "intergranular fracture"),
+    "Fatigue": ("ductile fracture", "cleavage fracture", "intergranular fracture"),
+    "Intergranular": ("ductile fracture", "fatigue crack", "cleavage fracture"),
+}
+
+
+def _rerank_score(text: str, similarity: float, predicted_class_en: str) -> float:
+    """코사인 유사도에 유형 적합성 신호를 소폭 더해 후보를 재정렬한다."""
+    lower = text.lower()
+    hits = sum(term in lower for term in CLASS_TERMS.get(predicted_class_en, ()))
+    other_hits = sum(term in lower for term in OTHER_CLASS_TERMS.get(predicted_class_en, ()))
+    boost = min(hits, 3) * 0.045
+    penalty = min(other_hits, 2) * (0.035 if hits == 0 else 0.008)
+    return similarity + boost - penalty
 
 
 def build_query(predicted_class_en: str) -> str:
@@ -377,6 +406,7 @@ class RagIndex:
         query: str,
         top_k: int = TOP_K,
         min_score: float = MIN_SCORE,
+        predicted_class_en: str = "",
     ) -> List[Dict]:
 
         if not self.ready:
@@ -392,40 +422,51 @@ class RagIndex:
 
         scores = self.embeddings @ q
 
-        order = np.argsort(-scores)
-
-        results: List[Dict] = []
-
-        # 같은 문단이 거의 그대로 반복되는 청크(중복 페이지, 합자 차이 등)는 한 번만 사용
-        seen_keys = set()
-
-        for i in order:
-
-            score = float(scores[i])
-
-            if score < min_score:
+        # 기존 min_score는 원본 코사인 유사도에만 적용한다.
+        candidates = []
+        for i in np.argsort(-scores):
+            similarity = float(scores[i])
+            if similarity < min_score:
                 break
-
             chunk = self.chunks[int(i)]
+            rank_score = _rerank_score(chunk["text"], similarity, predicted_class_en)
+            candidates.append((rank_score, similarity, chunk))
 
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        results: List[Dict] = []
+        seen_keys = set()
+        page_counts = {}
+
+        def append_candidate(similarity, chunk):
             key = re.sub(r"[^a-z0-9]", "", chunk["text"].lower())[:150]
-
             if key in seen_keys:
-                continue
-
+                return False
             seen_keys.add(key)
+            page_key = (chunk["source"], chunk.get("page"))
+            page_counts[page_key] = page_counts.get(page_key, 0) + 1
+            results.append({
+                "source": chunk["source"],
+                "page": chunk.get("page"),
+                "text": chunk["text"],
+                "score": round(similarity, 4),
+            })
+            return True
 
-            results.append(
-                {
-                    "source": chunk["source"],
-                    "page": chunk.get("page"),
-                    "text": chunk["text"],
-                    "score": round(score, 4),
-                }
-            )
-
+        # 우선 같은 문서의 같은 페이지에서 최대 2개만 선택한다.
+        for _, similarity, chunk in candidates:
+            page_key = (chunk["source"], chunk.get("page"))
+            if page_counts.get(page_key, 0) >= 2:
+                continue
+            append_candidate(similarity, chunk)
             if len(results) >= top_k:
                 break
+
+        # 결과가 부족하면 페이지 제한을 완화한다(중복 문단은 여전히 제외).
+        if len(results) < top_k:
+            for _, similarity, chunk in candidates:
+                append_candidate(similarity, chunk)
+                if len(results) >= top_k:
+                    break
 
         return results
 
@@ -458,31 +499,22 @@ def get_index() -> RagIndex:
 def retrieve_references(
     predicted_class_en: str,
     top_k: int = TOP_K,
+    *,
+    feature: str = "",
+    obs1: str = "",
+    obs2: str = "",
 ) -> List[Dict]:
-    """
-    예측 유형에 맞는 문헌 청크를 검색한다.
-    인덱스가 없거나 Ollama 오류가 나도 빈 리스트를 돌려주어 분석은 계속된다.
-    """
-
+    """Gemma 관찰 특징을 이용한 MDPI 초록 검색. 기존 API와 호환."""
     try:
-        idx = get_index()
-
-        if not idx.ready:
-            return []
-
-        refs = idx.search(
-            build_query(predicted_class_en),
+        from online_rag_service import search_online_references
+        refs = search_online_references(
+            predicted_class_en,
             top_k=top_k,
         )
-
-        print(
-            f"[RAG] {predicted_class_en}: {len(refs)}개 청크 검색"
-        )
-
+        print(f"[RAG 온라인 전용] {predicted_class_en}: {len(refs)}건")
         return refs
-
     except Exception as e:
-        print(f"[RAG] 검색 실패 → 참고 문헌 없이 진행: {e}")
+        print(f"[RAG 온라인 전용] 검색 실패: {e}")
         return []
 
 
@@ -523,6 +555,11 @@ def public_references(
             "page": ref.get("page"),
             "score": ref["score"],
             "snippet": ref["text"][:snippet_chars],
+            "source_type": ref.get("source_type", "local_pdf"),
+            "url": ref.get("url"),
+            "doi": ref.get("doi"),
+            "year": ref.get("year"),
+            "title": ref.get("source") if ref.get("source_type") == "online_abstract" else None,
         }
         for ref in refs
     ]

@@ -1306,6 +1306,54 @@ JSON 객체만 출력한다.
 # 보고서 생성
 # =========================================================
 
+def get_analysis_knowledge_refs(
+    prediction,
+    prediction_en,
+    material="",
+    probabilities=None,
+    gradcam_summary=None,
+    decision_path="",
+    feature="",
+    obs1="",
+    obs2="",
+    imaging=None,
+    background=None,
+):
+    """분석 완료 시 보고서용 후보 지식 카드를 미리 조회한다."""
+
+    imaging = imaging_info.normalize(imaging)
+    background = background_info.normalize(background)
+
+    context = report_rules.build_context(
+        prediction_en,
+        material,
+        imaging,
+        probabilities,
+        background,
+    )
+
+    cam_text = build_cam_text(
+        gradcam_summary,
+        probabilities,
+        decision_path,
+    )
+
+    cards = select_cards(
+        prediction_en,
+        material,
+        obs_query=" ".join(
+            str(x) for x in (prediction, feature, obs1, obs2) if x
+        ),
+        cam_query=cam_text,
+        banned_words=(
+            MATERIAL_WORDS if material in UNKNOWN_MATERIALS else ()
+        ),
+        imaging=imaging,
+        background_cards=context["background_cards"],
+    )
+
+    return public_cards(cards, [])
+
 def generate_report(prediction, prediction_en, confidence_percent,
                     material="", probabilities=None, gradcam_summary=None,
                     decision_path="", feature="", obs1="", obs2="", imaging=None,

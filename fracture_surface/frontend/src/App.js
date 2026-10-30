@@ -45,7 +45,7 @@ const EN_NAMES = {
   "입계 파괴": "Intergranular",
 };
 
-// SEM 촬영 정보 (선택 입력, 비우면 "모름")
+// SEM 촬영 정보 (선택 입력, 비우면 "미지정")
 const SEM_LOCATION_LABELS = {
   origin: "균열 시작점 부근",
   propagation: "균열 전파 영역",
@@ -90,10 +90,10 @@ const imagingSummary = (imaging) => {
   if (imaging.detector) parts.push(imaging.detector);
   if (imaging.cleaned) parts.push(`세척 ${YES_NO_LABELS[imaging.cleaned]}`);
   if (imaging.coated) parts.push(`코팅 ${YES_NO_LABELS[imaging.coated]}`);
-  return parts.length ? parts.join(" · ") : "모름";
+  return parts.length ? parts.join(" · ") : "미지정";
 };
 
-// 사전 배경 정보 (선택 입력, 비우면 "모름") — 값은 backend/background_info.py 와 같아야 한다
+// 사전 배경 정보 (선택 입력, 비우면 "미지정") — 값은 backend/background_info.py 와 같아야 한다
 const BG_ENVIRONMENT_LABELS = {
   air: "일반 대기",
   chloride: "수분·염화물 (해수 등)",
@@ -155,7 +155,7 @@ const backgroundSummary = (bg, material) => {
   if (bg.process.length) parts.push(bg.process.map((p) => BG_PROCESS_LABELS[p]).join(", "));
   if (bg.failure_manner) parts.push(BG_MANNER_LABELS[bg.failure_manner].split(" (")[0]);
   if (bg.note) parts.push("메모 있음");
-  return parts.length ? parts.join(" · ") : "모름";
+  return parts.length ? parts.join(" · ") : "미지정";
 };
 
 const MATERIAL_LABELS = {
@@ -169,7 +169,7 @@ const MATERIAL_LABELS = {
   nickel_alloy: "니켈 합금",
   tool_steel: "공구강",
   hea: "고엔트로피 합금 (HEA)",
-  unknown: "모름",
+  unknown: "미지정",
 };
 
 const PHASE_COLORS = {
@@ -1142,9 +1142,23 @@ function GradcamView({
 
   return (
     <div>
+      <div
+        className={`w-full ${canvasClass} rounded-xl border border-slate-200 bg-white overflow-hidden flex items-center justify-center`}
+      >
+        <canvas
+          ref={
+            canvasRef
+          }
+          className="w-full h-full object-contain"
+          style={{
+            display:
+              "block",
+          }}
+        />
+      </div>
       {activeClasses.length >
         0 && (
-        <div className="flex flex-wrap gap-2 mb-3">
+        <div className="flex flex-wrap justify-start gap-2 mt-3">
           {activeClasses.map(
             (name) => {
               const koName =
@@ -1202,21 +1216,6 @@ function GradcamView({
           )}
         </div>
       )}
-
-      <div
-        className={`w-full ${canvasClass} rounded-xl border border-slate-200 bg-white overflow-hidden flex items-center justify-center`}
-      >
-        <canvas
-          ref={
-            canvasRef
-          }
-          className="w-full h-full object-contain"
-          style={{
-            display:
-              "block",
-          }}
-        />
-      </div>
     </div>
   );
 }
@@ -1420,24 +1419,51 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
           <p className="text-xs tracking-[0.18em] uppercase text-blue-600 font-bold">
             Fracture Analysis Report
           </p>
-          <h2 className="text-2xl font-bold mt-1">파손단면 AI 분석 보고서</h2>
-          <p className="text-xs text-slate-500 mt-2">
-            생성 시각: {report?.generated_at || "-"} · 재질:{" "}
-            {report?.material_label || "-"}
-          </p>
-          {report?.imaging_label && (
-            <p className="text-xs text-slate-500 mt-1">
-              SEM 촬영 정보: {report.imaging_label}
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <h2 className="text-2xl font-bold mt-1">
+              파손단면 AI 분석 보고서
+            </h2>
+
+            <p className="text-xs text-slate-500">
+              생성 시각: {report?.generated_at || "-"}
             </p>
-          )}
-          {report?.background_label && (
-            <p className="text-xs text-slate-500 mt-1">
-              사전 배경 정보: {report.background_label}
-            </p>
-          )}
+          </div>
+
+          <div className="flex flex-wrap gap-x-5 gap-y-1 mt-3 text-xs text-slate-500">
+            <span>
+              재질:{" "}
+              {["모름", "unknown", "", null, undefined].includes(
+                report?.material_label
+              )
+                ? "미지정"
+                : report.material_label}
+            </span>
+
+            <span>
+              SEM 촬영 정보:{" "}
+              {["모름", "unknown", "", null, undefined].includes(
+                report?.imaging_label
+              )
+                ? "미지정"
+                : report.imaging_label}
+            </span>
+
+            <span>
+              사전 배경 정보:{" "}
+              {["모름", "unknown", "", null, undefined].includes(
+                report?.background_label
+              )
+                ? "미지정"
+                : report.background_label}
+            </span>
+          </div>
+
           {saveState?.status === "saving" && (
-            <p className="no-print text-[11px] text-slate-400 mt-1">보고서 저장 중…</p>
+            <p className="no-print text-[11px] text-slate-400 mt-1">
+              보고서 저장 중…
+            </p>
           )}
+
           {saveState?.status === "saved" && (
             <p className="no-print text-[11px] text-emerald-600 mt-1">
               ✓ 분석 기록에 저장됨
@@ -1477,44 +1503,74 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
 
         {/* 2. 분류 결과 */}
         <Section no="2" title="분류 결과">
-          <div className="rounded-xl bg-slate-50 border border-slate-200 p-5 text-center">
-            <p className="text-xs text-slate-500 uppercase tracking-[0.16em]">
-              Final classification
-            </p>
-            <p className="text-3xl font-black text-blue-700 mt-1">
-              {result.prediction_en} · {result.display_prediction || result.prediction}
-            </p>
-            <p className="text-2xl font-black mt-1">{result.confidence}</p>
-          </div>
+          <div className="grid grid-cols-[0.7fr_1.3fr] gap-4 items-stretch">
+            {/* 왼쪽: 최종 분류 */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-5 flex flex-col justify-center">
+              <p className="text-[11px] text-slate-500 uppercase tracking-[0.12em]">
+                Final classification
+              </p>
+              <p className="text-xl font-black text-blue-700 mt-2 break-words">
+                {result.display_prediction || result.prediction}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {result.prediction_en}
+              </p>
+              <p className="text-3xl font-black mt-3">
+                {result.confidence}
+              </p>
+            </div>
 
-          <div className="mt-4 space-y-3">
-            {probs.map(([name, value]) => {
-              const percent = Math.max(0, Math.min(100, parseFloat(value) || 0));
-              const isPred = name === (result.display_prediction || result.prediction);
-              return (
-                <div key={name}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className={isPred ? "font-bold" : value === "-" ? "text-slate-300" : "text-slate-500"}>
-                      {name} ({EN_NAMES[name]})
+            {/* 오른쪽: 유형별 막대그래프 */}
+            <div className="rounded-xl border border-slate-200 p-4 flex flex-col justify-center gap-3">
+              {probs.map(([name, value]) => {
+                const percent = Math.max(
+                  0,
+                  Math.min(100, parseFloat(value) || 0)
+                );
+                const predictedName =
+                  result.display_prediction || result.prediction || "";
+                const isPred =
+                  Boolean(predictedName) &&
+                  (name === predictedName || name.includes(predictedName));
+                return (
+                  <div key={name} className="flex items-center gap-3">
+                    {/* 왼쪽: 파손 유형 */}
+                    <span
+                      className={`w-[65px] shrink-0 text-[11px] ${
+                        isPred ? "font-bold text-slate-900" : "text-slate-500"
+                      }`}
+                    >
+                      {name}
                     </span>
-                    <span className={isPred ? "font-bold text-blue-700" : "text-slate-500"}>
+
+                    {/* 가운데: 막대그래프 */}
+                    <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          isPred ? "bg-blue-600" : "bg-slate-300"
+                        }`}
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+
+                    {/* 오른쪽: 확률 */}
+                    <span
+                      className={`w-[40px] shrink-0 text-right text-[11px] ${
+                        isPred ? "font-bold text-blue-700" : "text-slate-500"
+                      }`}
+                    >
                       {value}
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full ${isPred ? "bg-blue-600" : "bg-slate-300"}`}
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
           <p className="text-[11px] text-slate-400 mt-2">
             "-"는 Grad-CAM++에서 검출되지 않은 유형입니다.
           </p>
         </Section>
+
 
         {loading && (
           <div className="mt-10 text-center py-10">
@@ -1544,70 +1600,121 @@ function ReportModal({ result, previewUrl, report, loading, error, onClose, save
             </Section>
 
             <Section no="6" title="신뢰도 및 정확한 원인 분석을 위한 확인 사항">
-              <div className={`rounded-lg border p-4 ${statusStyle}`}>
-                <p className="text-sm leading-6">{report.confidence_comment}</p>
+              <div className={`rounded-lg border p-3 ${statusStyle}`}>
+                <p className="text-sm leading-6">
+                  {report.confidence_comment}
+                </p>
               </div>
 
-              <p className="text-sm text-slate-700 leading-7 mt-4">{report.next_steps_note}</p>
+              {report.next_steps_note && (
+                <p className="text-sm text-slate-700 leading-6 mt-3">
+                  {report.next_steps_note}
+                </p>
+              )}
 
-              <ol className="mt-3 space-y-3">
-                {report.next_steps.map((s, i) => (
-                  <li key={i} className="flex gap-3 break-inside-avoid">
-                    <span className="w-6 h-6 shrink-0 rounded-full bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center">
-                      {i + 1}
-                    </span>
-                    <div>
-                      <p className="text-sm font-bold">{s.title}</p>
-                      <p className="text-sm text-slate-600 leading-6">{s.detail}</p>
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                {(Array.isArray(report.next_steps) ? report.next_steps : [])
+                  .map((step, i) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-3 break-inside-avoid"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="w-5 h-5 shrink-0 rounded-full bg-slate-200 text-slate-700 text-[11px] font-bold flex items-center justify-center">
+                          {i + 1}
+                        </span>
+                        <p className="text-sm font-bold leading-5">
+                          {step.title}
+                        </p>
+                      </div>
+
+                      <p className="mt-2 text-xs text-slate-600 leading-5">
+                        {step.detail}
+                      </p>
                     </div>
-                  </li>
-                ))}
-              </ol>
+                  ))}
+              </div>
             </Section>
 
             {report.knowledge_refs?.length > 0 && (
-              <Section no="7" title="참고 근거 (문헌 지식 카드)">
-                <p className="text-xs text-slate-500 leading-5">
-                  보고서 작성 시 AI에게 제공된 문헌 요약입니다.
-                  {report.knowledge_refs.some((k) => k.cited)
-                    ? " ‘인용’ 표시는 AI가 실제로 사용했다고 밝힌 카드입니다."
-                    : ""}
+              <Section no="7" title="참고 자료 및 출처">
+                <p className="mb-3 text-xs text-slate-500">
+                  보고서 작성에 제공된 참고 지식과 문헌 출처입니다.
+                  실제 파손 원인을 입증하는 자료는 아닙니다.
                 </p>
-                <ul className="mt-3 space-y-3">
-                  {report.knowledge_refs.map((k) => (
-                    <li
-                      key={k.id}
-                      className="rounded-lg border border-slate-200 bg-slate-50 p-3 break-inside-avoid"
-                    >
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="font-bold text-slate-700">{k.id}</span>
-                        <span className="text-slate-500">{k.section}</span>
-                        {k.cited && (
-                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-700">
-                            인용
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-700 leading-6 mt-1">{k.text}</p>
-                      {k.sources?.map((s, i) => (
-                        <p key={i} className="text-[11px] text-slate-500 leading-5 mt-1">
-                          {s.url ? (
-                            <a
-                              href={s.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="underline decoration-slate-300 underline-offset-2 hover:text-emerald-700"
-                            >
-                              {s.citation}
-                            </a>
+
+                <div className="rounded-lg border border-slate-200 overflow-hidden">
+                  <div className="grid grid-cols-2 gap-3 bg-slate-100 px-3 py-2 text-xs font-bold">
+                    <span>참고한 내용</span>
+                    <span>자료 출처 / 링크</span>
+                  </div>
+
+                  {report.knowledge_refs.map((k, index) => {
+                    const summary = String(k.text || k.section || "참고 내용 없음")
+                      .split(/[.。\n]/)[0]
+                      .trim();
+
+                    const shortSummary =
+                      summary.length > 90
+                        ? `${summary.slice(0, 90)}…`
+                        : summary;
+
+                    return (
+                      <div
+                        key={`${k.id || "knowledge"}-${index}`}
+                        className="grid grid-cols-2 gap-3 border-t border-slate-200 px-3 py-2 text-xs break-inside-avoid"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-slate-700">
+                              {k.section || "참고 지식"}
+                              {k.id && (
+                                <span className="ml-1 text-slate-400">
+                                  ({k.id})
+                                </span>
+                              )}
+                            </p>
+
+                            {k.cited === true && (
+                              <span className="rounded-md bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700">
+                                인용
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="mt-1 text-slate-600 leading-5">
+                            {shortSummary}
+                          </p>
+                        </div>
+
+                        <div className="space-y-1">
+                          {Array.isArray(k.sources) && k.sources.length > 0 ? (
+                            k.sources.map((source, i) => (
+                              <p key={i} className="text-slate-500 leading-5 break-words">
+                                {source.url ? (
+                                  <a
+                                    href={source.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-700 underline"
+                                  >
+                                    {source.citation || source.url}
+                                  </a>
+                                ) : (
+                                  source.citation || "출처 정보 없음"
+                                )}
+                              </p>
+                            ))
                           ) : (
-                            s.citation
+                            <p className="text-slate-400">
+                              출처 정보 없음
+                            </p>
                           )}
-                        </p>
-                      ))}
-                    </li>
-                  ))}
-                </ul>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </Section>
             )}
 
@@ -1646,7 +1753,7 @@ export default function App() {
   const [
     material,
     setMaterial,
-  ] = useState("");
+  ] = useState("unknown");
 
   const [imaging, setImaging] = useState(EMPTY_IMAGING);
 
@@ -2001,11 +2108,10 @@ useEffect(() => {
 }, []);
 
   const materialText =
-    MATERIAL_LABELS[
-      result?.material
-    ] ||
-    result?.material ||
-    "모름";
+    MATERIAL_LABELS[result?.material] ||
+    (result?.material && result.material !== "미지정"
+      ? result.material
+      : "미지정");
 
   const confidenceStyle =
     CONFIDENCE_BOX_STYLES[
@@ -2275,9 +2381,7 @@ useEffect(() => {
       );
 
       setMaterial(
-        item.result
-          .material ||
-          ""
+        item.result.material || "unknown"
       );
 
       setImaging(toImagingInputs(item.result.imaging));
@@ -2497,12 +2601,12 @@ const handleDbToggle = async (next) => {
         material
       );
 
-      // SEM 촬영 정보 (빈 값 = 모름)
+      // SEM 촬영 정보 (빈 값 = 미지정)
       Object.entries(imaging).forEach(([key, value]) => {
         formData.append(`sem_${key}`, value);
       });
 
-      // 사전 배경 정보 (빈 값 = 모름, 복수 선택은 쉼표로 구분)
+      // 사전 배경 정보 (빈 값 = 미지정, 복수 선택은 쉼표로 구분)
       Object.entries(background).forEach(([key, value]) => {
         formData.append(`bg_${key}`, Array.isArray(value) ? value.join(",") : value);
       });
@@ -2803,7 +2907,7 @@ const handleDbToggle = async (next) => {
           }
           className={`fixed top-5 z-50 rounded-r-xl bg-slate-900 text-white px-3 py-3 text-sm shadow-lg transition-all duration-300 ${
             sidebarOpen
-              ? "left-80"
+              ? "left-[384px]"
               : "left-0"
           }`}
         >
@@ -2816,7 +2920,7 @@ const handleDbToggle = async (next) => {
         <aside
           className={`fixed lg:sticky top-0 left-0 z-40 h-screen bg-white border-r border-slate-200 transition-all duration-300 overflow-y-auto overflow-x-hidden ${
             sidebarOpen
-              ? "w-80 translate-x-0 p-5"
+              ? "w-[384px] shrink-0 translate-x-0 p-5"
               : "w-0 -translate-x-full p-0 border-none"
           }`}
         >
@@ -2903,10 +3007,14 @@ const handleDbToggle = async (next) => {
                 {history.map((item) => {
                   const itemResult = item.result;
 
+                  const rawMaterial = itemResult?.material;
+
                   const itemMaterial =
-                    MATERIAL_LABELS[itemResult.material] ||
-                    itemResult.material ||
-                    "-";
+                    !rawMaterial ||
+                    rawMaterial === "미지정" ||
+                    rawMaterial === "unknown"
+                      ? "미지정"
+                      : (MATERIAL_LABELS[rawMaterial] || rawMaterial);
 
                   const checked =
                     selectedCompareIds.includes(item.id);
@@ -2914,6 +3022,7 @@ const handleDbToggle = async (next) => {
                   const deleteChecked =
                     deleteMode && deleteIds.includes(item.id);
 
+                  
                   return (
                     <div
                       key={item.id}
@@ -2922,7 +3031,7 @@ const handleDbToggle = async (next) => {
                           ? toggleDeleteSelect(item.id)
                           : handleHistoryClick(item)
                       }
-                      className={`relative w-full text-left p-3 rounded-xl border transition cursor-pointer ${
+                      className={`relative w-[330px] max-w-full text-left p-3 rounded-xl border transition cursor-pointer ${
                         deleteChecked
                           ? "bg-red-50 border-red-400"
                           : checked && !deleteMode
@@ -2930,35 +3039,8 @@ const handleDbToggle = async (next) => {
                             : "bg-white hover:border-slate-400 hover:bg-slate-50 border-slate-200"
                       }`}
                     >
-                      {deleteMode ? (
-                        <input
-                          type="checkbox"
-                          checked={deleteChecked}
-                          onClick={(e) =>
-                            e.stopPropagation()
-                          }
-                          onChange={() =>
-                            toggleDeleteSelect(item.id)
-                          }
-                          aria-label="삭제할 기록 선택"
-                          className="absolute top-3 right-3 w-4 h-4 accent-red-600 cursor-pointer"
-                        />
-                      ) : (
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onClick={(e) =>
-                            e.stopPropagation()
-                          }
-                          onChange={() =>
-                            toggleCompareSelect(item.id)
-                          }
-                          aria-label="비교할 기록 선택"
-                          className="absolute top-3 right-3 w-4 h-4 accent-slate-900 cursor-pointer"
-                        />
-                      )}
-
-                      <div className="flex gap-3 pr-6">
+                      <div className="flex gap-3">
+                        {/* 이미지 */}
                         <div className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0">
                           {item.image ? (
                             <img
@@ -2973,18 +3055,19 @@ const handleDbToggle = async (next) => {
                           )}
                         </div>
 
-                        <div className="min-w-0">
-                          <p className="font-bold text-sm">
-                            {itemResult.display_prediction ||
-                              itemResult.prediction}
-                          </p>
+                        {/* 분석 정보 */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5">
+                            <span className="font-bold text-sm">
+                              {itemResult.display_prediction || itemResult.prediction}
+                            </span>
+                            <span className="text-sm text-blue-600 font-semibold">
+                              {itemResult.confidence}
+                            </span>
+                          </div>
 
-                          <p className="text-sm text-blue-600 font-semibold">
-                            {itemResult.confidence}
-                          </p>
-
-                          <p className="text-xs text-slate-500 truncate">
-                            {itemMaterial}
+                          <p className="text-xs text-slate-500 truncate mt-1">
+                            재질: {itemMaterial}
                           </p>
 
                           <p className="text-[11px] text-slate-400 mt-1">
@@ -2994,18 +3077,41 @@ const handleDbToggle = async (next) => {
                                 임시
                               </span>
                             )}
-                            {reportIds.has(item.docId) && (
-                              <p>
-                              <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                              보고서
-                              </span>
-                              </p>
-                            )}
                           </p>
+                        </div>
+
+                        {/* 오른쪽 영역: 체크박스 + 보고서 */}
+                        <div className="w-11 shrink-0 flex flex-col items-end justify-between">
+                          {deleteMode ? (
+                            <input
+                              type="checkbox"
+                              checked={deleteChecked}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleDeleteSelect(item.id)}
+                              aria-label="삭제할 기록 선택"
+                              className="w-4 h-4 accent-red-600 cursor-pointer"
+                            />
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleCompareSelect(item.id)}
+                              aria-label="비교할 기록 선택"
+                              className="w-4 h-4 accent-slate-900 cursor-pointer"
+                            />
+                          )}
+
+                          {reportIds.has(item.docId) && (
+                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 whitespace-nowrap">
+                              보고서
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                   );
+
                 })}
               </div>
             </>
@@ -3029,12 +3135,23 @@ const handleDbToggle = async (next) => {
 
                 {phaseHistory.length > 0 && !deleteMode && (
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setDeleteMode(true)}
-                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
-                    >
-                      선택 삭제
-                    </button>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={openCompare}
+                        disabled={selectedCompareIds.length < 2}
+                        className="flex-1 min-w-0 rounded-lg bg-slate-900 text-white py-2 text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-700 transition"
+                      >
+                        선택 결과 비교 ({selectedCompareIds.length}/2)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDeleteMode(true)}
+                        className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 transition"
+                      >
+                        선택 삭제
+                      </button>
+                    </div>
                     <button
                       onClick={async () => {
                         try { await clearAllPhaseHistory(); } catch (e) { console.error(e); }
@@ -3277,10 +3394,15 @@ const handleDbToggle = async (next) => {
                 {/* 입력 이미지 */}
                 <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col">
 
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-bold text-base">
-                      입력 이미지
-                    </h3>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-bold text-base">
+                        입력 이미지
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        분석 대상 원본 이미지
+                      </p>
+                    </div>
 
                     {previewUrl && (
                       <button
@@ -3292,7 +3414,7 @@ const handleDbToggle = async (next) => {
                     )}
                   </div>
 
-                  <div className="flex-1 flex flex-col justify-center py-5">
+                  <div className="flex-1 flex flex-col justify-start pt-10 pb-5">
                     <label
                       htmlFor="file-input"
                       className="h-[350px] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-pointer"
@@ -3350,7 +3472,7 @@ const handleDbToggle = async (next) => {
                             onChange={(e) => setMaterial(e.target.value)}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
                           >
-                            <option value="">모름</option>
+                            <option value="unknown">미지정</option>
                             {Object.entries(MATERIAL_LABELS)
                               .filter(([value]) => value !== "unknown")
                               .map(([value, label]) => (
@@ -3386,7 +3508,7 @@ const handleDbToggle = async (next) => {
                               onChange={updateBackground("load")}
                               className="h-9 px-2 rounded border border-slate-300 bg-white"
                             >
-                              <option value="">모름</option>
+                              <option value="">미지정</option>
                               {Object.entries(BG_LOAD_LABELS).map(([v, l]) => (
                                 <option key={v} value={v}>{l}</option>
                               ))}
@@ -3400,7 +3522,7 @@ const handleDbToggle = async (next) => {
                               onChange={updateBackground("temperature")}
                               className="h-9 px-2 rounded border border-slate-300 bg-white"
                             >
-                              <option value="">모름</option>
+                              <option value="">미지정</option>
                               {Object.entries(BG_TEMPERATURE_LABELS).map(([v, l]) => (
                                 <option key={v} value={v}>{l}</option>
                               ))}
@@ -3414,7 +3536,7 @@ const handleDbToggle = async (next) => {
                               onChange={updateBackground("failure_manner")}
                               className="h-9 px-2 rounded border border-slate-300 bg-white"
                             >
-                              <option value="">모름</option>
+                              <option value="">미지정</option>
                               {Object.entries(BG_MANNER_LABELS).map(([v, l]) => (
                                 <option key={v} value={v}>{l}</option>
                               ))}
@@ -3463,7 +3585,7 @@ const handleDbToggle = async (next) => {
                           }}
                           className="text-[11px] text-slate-500 underline"
                         >
-                          모두 모름으로
+                          모두 미지정으로
                         </button>
                       </div>
                     </details>
@@ -3479,7 +3601,7 @@ const handleDbToggle = async (next) => {
                           <input
                             type="number"
                             min="0"
-                            placeholder="모름"
+                            placeholder="미지정"
                             value={imaging.magnification}
                             onChange={updateImaging("magnification")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
@@ -3492,7 +3614,7 @@ const handleDbToggle = async (next) => {
                             type="number"
                             min="0"
                             step="any"
-                            placeholder="모름"
+                            placeholder="미지정"
                             value={imaging.scale_bar_um}
                             onChange={updateImaging("scale_bar_um")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
@@ -3506,7 +3628,7 @@ const handleDbToggle = async (next) => {
                             onChange={updateImaging("location")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
                           >
-                            <option value="">모름</option>
+                            <option value="">미지정</option>
                             {Object.entries(SEM_LOCATION_LABELS).map(([v, l]) => (
                               <option key={v} value={v}>{l}</option>
                             ))}
@@ -3520,7 +3642,7 @@ const handleDbToggle = async (next) => {
                             onChange={updateImaging("detector")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
                           >
-                            <option value="">모름</option>
+                            <option value="">미지정</option>
                             {Object.entries(SEM_DETECTOR_LABELS).map(([v, l]) => (
                               <option key={v} value={v}>{l}</option>
                             ))}
@@ -3534,7 +3656,7 @@ const handleDbToggle = async (next) => {
                             onChange={updateImaging("cleaned")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
                           >
-                            <option value="">모름</option>
+                            <option value="">미지정</option>
                             {Object.entries(YES_NO_LABELS).map(([v, l]) => (
                               <option key={v} value={v}>{l}</option>
                             ))}
@@ -3548,7 +3670,7 @@ const handleDbToggle = async (next) => {
                             onChange={updateImaging("coated")}
                             className="h-9 px-2 rounded border border-slate-300 bg-white"
                           >
-                            <option value="">모름</option>
+                            <option value="">미지정</option>
                             {Object.entries(YES_NO_LABELS).map(([v, l]) => (
                               <option key={v} value={v}>{l}</option>
                             ))}
@@ -3565,7 +3687,7 @@ const handleDbToggle = async (next) => {
                           onClick={() => setImaging(EMPTY_IMAGING)}
                           className="text-[11px] text-slate-500 underline"
                         >
-                          모두 모름으로
+                          모두 미지정으로
                         </button>
                       </div>
                     </details>
@@ -3598,17 +3720,19 @@ const handleDbToggle = async (next) => {
                       )}
                   </div>
 
-                  <div className="flex-1 flex flex-col justify-center py-5">
+                  <div className="flex-1 flex flex-col justify-start pt-10 pb-5">
                     {result &&
                     (result.gradcam_masks ||
                       result.gradcam_layers ||
                       (result.gradcam_contours &&
                         Object.keys(result.gradcam_contours).length > 0)) ? (
-                      <GradcamView
-                        result={result}
-                        chipSize="text-[11px]"
-                        canvasClass="h-[350px]"
-                      />
+                      // <div className="mt-7">
+                        <GradcamView
+                          result={result}
+                          chipSize="text-[11px]"
+                          canvasClass="h-[350px]"
+                        />
+                      // </div>
                     ) : (
                       <div className="h-[350px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center">
                         <div className="text-center">
@@ -3654,7 +3778,7 @@ const handleDbToggle = async (next) => {
                         <span
                           className={`inline-block mt-3 px-3 py-1 rounded-full border text-xs font-bold ${confidenceStyle}`}
                         >
-                          신뢰도 {confidenceLabel}
+                          예측 점수 {confidenceLabel}
                         </span>
                       </div>
 
@@ -3732,7 +3856,7 @@ const handleDbToggle = async (next) => {
               <div className="border-t border-slate-200 p-5">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { key: "rag", label: "관련 문헌 검색 결과" },
+                    { key: "rag", label: "AI 설명 참고 자료" },
                     { key: "similar", label: "유사 이미지" },
                   ].map((tab) => (
                     <button
@@ -3752,9 +3876,13 @@ const handleDbToggle = async (next) => {
                 {result && (
                   <div className="mt-5 rounded-xl border border-slate-200 p-5">
                     {detailTab === "rag" && (
-                      <ReferenceCard references={result.references || []} />
+                      <ReferenceCard
+                        references={result.references || []}
+                        knowledgeRefs={result.knowledge_refs || []}
+                        reportLoading={false}
+                      />
                     )}
-
+                    
                     {detailTab === "similar" && (
                       <div>
                         <h3 className="font-bold mb-4">
