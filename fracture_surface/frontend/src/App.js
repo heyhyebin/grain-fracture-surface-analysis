@@ -991,38 +991,82 @@ function GradcamView({
           );
         }
       } else if (hasContoursOnly) {
-        for (
-          const name of
-          allClasses
-        ) {
-          if (!checked[name]) continue;
+        // 윤곽선 전체에 부여된 overlaps_with 대신, 실제 겹치는 구간만 점선으로 그린다.
+        const visible = allClasses.filter((name) => checked[name]);
+        const shapes = Object.fromEntries(
+          visible.map((name) => [
+            name,
+            contoursToPolylines(result.gradcam_contours?.[name] || []),
+          ])
+        );
 
-          const contoursForClass =
-            result.gradcam_contours?.[name] || [];
-
-          if (contoursForClass.length === 0) continue;
-
-          const items = contoursToPolylines(contoursForClass);
-
-          const solo = items
-            .filter((it) => it.overlaps.length === 0)
-            .map((it) => it.poly);
-
-          const overlap = items
-            .filter((it) => it.overlaps.length > 0)
-            .map((it) => it.poly);
-
-          if (solo.length > 0) {
-            drawPolylines(ctx, solo, CLASS_COLORS[name], {
-              lineWidth: 3,
-            });
+        // 닫힌 윤곽선 안에 있는지 검사한다. 다른 유형의 영역 내부에 들어간
+        // 선분만 겹침으로 간주하므로, 같은 윤곽선의 나머지 부분은 실선이 된다.
+        const pointInPolygon = (p, poly) => {
+          let inside = false;
+          for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const a = poly[i];
+            const b = poly[j];
+            if ((a.y > p.y) !== (b.y > p.y) &&
+                p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+              inside = !inside;
+            }
           }
+          return inside;
+        };
 
-          if (overlap.length > 0) {
-            drawPolylines(ctx, overlap, CLASS_COLORS[name], {
-              dashed: true,
-              lineWidth: 4.5,
-            });
+        const otherPolygons = Object.fromEntries(
+          visible.map((name) => [
+            name,
+            visible
+              .filter((other) => other !== name)
+              .flatMap((other) => shapes[other].map((item) => item.poly))
+              .filter((poly) => poly.length >= 4)
+              .map((poly) => ({
+                poly,
+                minX: Math.min(...poly.map((p) => p.x)),
+                maxX: Math.max(...poly.map((p) => p.x)),
+                minY: Math.min(...poly.map((p) => p.y)),
+                maxY: Math.max(...poly.map((p) => p.y)),
+              })),
+          ])
+        );
+
+        for (const name of visible) {
+          const color = CLASS_COLORS[name] || "#111827";
+          const polygons = otherPolygons[name];
+          for (const item of shapes[name]) {
+            const poly = item.poly;
+            if (poly.length < 2) continue;
+
+            // 각 선분의 중간점을 기준으로 겹침을 판정하고 연속 구간별로 그린다.
+            // 한 유형만 켜져 있으면 polygons가 비어 있어 모두 실선이다.
+            let run = [poly[0]];
+            let runOverlap = null;
+            const flush = () => {
+              if (run.length < 2) return;
+              drawPolylines(ctx, [run], color, runOverlap
+                ? { dashed: true, lineWidth: 4.5 }
+                : { lineWidth: 3 });
+            };
+
+            for (let i = 1; i < poly.length; i++) {
+              const a = poly[i - 1];
+              const b = poly[i];
+              const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+              const overlapping = polygons.some(({ poly: other, minX, maxX, minY, maxY }) =>
+                midpoint.x >= minX && midpoint.x <= maxX &&
+                midpoint.y >= minY && midpoint.y <= maxY &&
+                pointInPolygon(midpoint, other)
+              );
+              if (runOverlap !== null && runOverlap !== overlapping) {
+                flush();
+                run = [a];
+              }
+              runOverlap = overlapping;
+              run.push(b);
+            }
+            flush();
           }
         }
       } else {
