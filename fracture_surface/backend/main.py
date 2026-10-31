@@ -1267,6 +1267,7 @@ async def compare_analysis(
         "items",
         [],
     )
+    print(f"[COMPARE API] 비교 요청 수신: {len(items)}개", flush=True)
 
 
     # ═══════════════════════════════════════════════════
@@ -1310,12 +1311,15 @@ async def compare_analysis(
     # ═══════════════════════════════════════════════════
 
     try:
+        print("[COMPARE] LLM 비교 시작", flush=True)
 
         compare_result = (
             generate_compare_analysis(
                 items
             )
         )
+
+        print("[COMPARE] LLM 비교 완료", flush=True)
 
 
     except Exception as e:

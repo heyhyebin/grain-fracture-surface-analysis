@@ -750,6 +750,7 @@ COMPARE_TEXT_FIELDS = (
 )
 
 
+
 def generate_compare_analysis(compare_items: list):
 
     def parse_confidence(value):
@@ -797,6 +798,27 @@ def generate_compare_analysis(compare_items: list):
 
     cause_exp1 = item1.get("cause_explanation", "")
     cause_exp2 = item2.get("cause_explanation", "")
+
+    # 최종 AI 보고서가 있으면 해당 내용을 비교에 우선 사용
+    report1 = item1.get("report") if isinstance(item1.get("report"), dict) else {}
+    report2 = item2.get("report") if isinstance(item2.get("report"), dict) else {}
+
+    def report_value(report, key, fallback=""):
+        value = report.get(key)
+        return value.strip() if isinstance(value, str) and value.strip() else fallback
+
+    characteristics1 = report_value(report1, "characteristics", " ".join(x for x in [feature1, obs1_1, obs1_2] if x))
+    characteristics2 = report_value(report2, "characteristics", " ".join(x for x in [feature2, obs2_1, obs2_2] if x))
+    basis1 = report_value(report1, "basis", mechanism1)
+    basis2 = report_value(report2, "basis", mechanism2)
+    report_cause1 = report_value(report1, "cause", cause_exp1 or cause1)
+    report_cause2 = report_value(report2, "cause", cause_exp2 or cause2)
+    next_note1 = report_value(report1, "next_steps_note")
+    next_note2 = report_value(report2, "next_steps_note")
+    context1 = report_value(report1, "background_label")
+    context2 = report_value(report2, "background_label")
+    imaging1 = report_value(report1, "imaging_label")
+    imaging2 = report_value(report2, "imaging_label")
 
     # 기존 분석 기록과 호환
     if not obs1_1:
@@ -906,6 +928,14 @@ CNN 신뢰도:
 원인 설명:
 {cause_exp1}
 
+[최종 AI 보고서 1 — 우선 참고]
+관찰 특징: {characteristics1}
+판단 근거(Grad-CAM++): {basis1}
+원인 해석: {report_cause1}
+추가 확인: {next_note1}
+입력된 배경 조건: {context1}
+촬영 정보: {imaging1}
+
 
 ==================================================
 [분석 2]
@@ -935,6 +965,14 @@ CNN 신뢰도:
 원인 설명:
 {cause_exp2}
 
+[최종 AI 보고서 2 — 우선 참고]
+관찰 특징: {characteristics2}
+판단 근거(Grad-CAM++): {basis2}
+원인 해석: {report_cause2}
+추가 확인: {next_note2}
+입력된 배경 조건: {context2}
+촬영 정보: {imaging2}
+
 
 ==================================================
 [파손 유형 비교 조건]
@@ -959,6 +997,9 @@ CNN 신뢰도:
 8. CNN 파손 메커니즘과의 관계
 9. 예상 원인
 
+최종 AI 보고서의 특징과 판단 근거를 우선 비교한다.
+보고서가 없는 항목은 기존 분석 결과를 사용한다.
+서로 다른 스케일 바는 실제 크기 비교의 한계로 명시한다.
 입력 결과에 없는 특징은 추가하지 않는다.
 
 차이가 명확하지 않은 항목은
@@ -995,7 +1036,7 @@ CNN 신뢰도:
 [메커니즘 차이]
 ==================================================
 
-입력된 mechanism_relation을 중심으로
+보고서의 basis와 기존 mechanism_relation을 중심으로
 각 이미지의 관찰 특징과
 CNN 파손 메커니즘 관계의 차이를 설명한다.
 
@@ -1006,7 +1047,9 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
 [예상 원인 차이]
 ==================================================
 
-각 분석에서 이미 제시된 expected_cause만 비교한다.
+각 분석의 최종 AI 보고서 cause를 우선 비교한다.
+보고서가 없을 때만 기존 expected_cause와 cause_explanation을 사용한다.
+보고서에 명시된 배경 조건은 사용자 입력 정보로만 취급하며, 관찰된 사실로 단정하지 않는다.
 
 새로운 사고 원인을 생성하지 않는다.
 
@@ -1052,7 +1095,7 @@ CNN 파손 메커니즘 관계의 차이를 설명한다.
 - 입력에 없는 이미지 특징 생성
 - 실제 사고 상황 추측
 - 부품 종류 추측
-- 사용 환경 추측
+- 입력되지 않은 사용 환경 추측
 - 재질 특성으로 차이 생성
 - 원인 단정
 - 동일 내용 반복

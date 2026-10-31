@@ -3135,24 +3135,15 @@ const handleDbToggle = async (next) => {
 
                 {phaseHistory.length > 0 && !deleteMode && (
                   <div className="flex items-center gap-3">
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        onClick={openCompare}
-                        disabled={selectedCompareIds.length < 2}
-                        className="flex-1 min-w-0 rounded-lg bg-slate-900 text-white py-2 text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-700 transition"
-                      >
-                        선택 결과 비교 ({selectedCompareIds.length}/2)
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setDeleteMode(true)}
-                        className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 transition"
-                      >
-                        선택 삭제
-                      </button>
-                    </div>
                     <button
+                      type="button"
+                      onClick={() => setDeleteMode(true)}
+                      className="text-xs text-slate-400 hover:text-red-500 whitespace-nowrap"
+                    >
+                      선택 삭제
+                    </button>
+                    <button
+                      type="button"
                       onClick={async () => {
                         try { await clearAllPhaseHistory(); } catch (e) { console.error(e); }
                         setPhaseHistory([]);
